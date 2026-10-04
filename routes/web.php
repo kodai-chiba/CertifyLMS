@@ -17,6 +17,7 @@ use App\Http\Controllers\EnrollmentManagementController;
 use App\Http\Controllers\InvitationController;
 use App\Http\Controllers\LearningHourTargetController;
 use App\Http\Controllers\MeetingController;
+use App\Http\Controllers\MeetingPackController;
 use App\Http\Controllers\MeetingQuotaHistoryController;
 use App\Http\Controllers\MockExamAnswerController;
 use App\Http\Controllers\MockExamCatalogController;
@@ -186,6 +187,28 @@ Route::middleware(['auth', 'role:admin'])->prefix('admin')->group(function () {
         ->parameters(['certification-categories' => 'category'])
         ->except(['show', 'create', 'edit'])
         ->names('admin.certification-categories');
+
+    // 面談パックマスタ管理
+    Route::get('meeting-packs', [MeetingPackController::class, 'index'])
+        ->name('admin.meeting-packs.index');
+    Route::get('meeting-packs/create', [MeetingPackController::class, 'create'])
+        ->name('admin.meeting-packs.create');
+    Route::post('meeting-packs', [MeetingPackController::class, 'store'])
+        ->name('admin.meeting-packs.store');
+    Route::get('meeting-packs/{plan}', [MeetingPackController::class, 'show'])
+        ->name('admin.meeting-packs.show');
+    Route::get('meeting-packs/{plan}/edit', [MeetingPackController::class, 'edit'])
+        ->name('admin.meeting-packs.edit');
+    Route::patch('meeting-packs/{plan}', [MeetingPackController::class, 'update'])
+        ->name('admin.meeting-packs.update');
+    Route::delete('meeting-packs/{plan}', [MeetingPackController::class, 'destroy'])
+        ->name('admin.meeting-packs.destroy');
+    Route::post('meeting-packs/{plan}/publish', [MeetingPackController::class, 'publish'])
+        ->name('admin.meeting-packs.publish');
+    Route::post('meeting-packs/{plan}/archive', [MeetingPackController::class, 'archive'])
+        ->name('admin.meeting-packs.archive');
+    Route::post('meeting-packs/{plan}/unarchive', [MeetingPackController::class, 'unarchive'])
+        ->name('admin.meeting-packs.unarchive');
 
     // 受講登録管理 — 試験日変更 / 手動学習中止のみ admin 専用(一覧 / 詳細は全ロール共有 group 側に定義)
     Route::patch('enrollments/{enrollment}/exam-date', [EnrollmentManagementController::class, 'updateExamDate'])
