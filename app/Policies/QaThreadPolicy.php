@@ -76,8 +76,7 @@ class QaThreadPolicy
 
         return $this->view($user, $qaThread)
             && $user->role === UserRole::Student
-            && $user->id === $qaThread->user_id
-            && ! $qaThread->replies()->exists();
+            && $user->id === $qaThread->user_id;
     }
 
     /**

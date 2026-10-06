@@ -74,7 +74,10 @@ class QaBoardManagementController extends Controller
     ): RedirectResponse {
         $this->authorize('delete', $thread);
 
-        $action($thread);
+        $action(
+            thread: $thread,
+            actor: request()->user(),
+        );
 
         return redirect()
             ->route('admin.qa-board.index')

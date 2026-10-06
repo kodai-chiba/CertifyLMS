@@ -124,7 +124,10 @@ class QaThreadController extends Controller
     ): RedirectResponse {
         $this->authorize('delete', $thread);
 
-        $action($thread);
+        $action(
+            thread: $thread,
+            actor: request()->user(),
+        );
 
         return redirect()
             ->route('qa-board.index')

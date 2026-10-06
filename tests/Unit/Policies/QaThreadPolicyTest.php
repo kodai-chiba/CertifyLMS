@@ -17,7 +17,7 @@ use Tests\TestCase;
  * QaThreadPolicy の認可判定を検証する Unit テスト。
  *
  * student / coach / admin のロール分岐、
- * 公開状態、投稿者本人、回答有無、解決状態による権限制御を検証する。
+ * 公開状態、投稿者本人、解決状態による権限制御を検証する。
  */
 class QaThreadPolicyTest extends TestCase
 {
@@ -83,7 +83,7 @@ class QaThreadPolicyTest extends TestCase
         $this->assertTrue((new QaThreadPolicy)->delete($student, $thread));
     }
 
-    public function test_student_cannot_delete_own_thread_when_it_has_replies(): void
+    public function test_student_is_authorized_to_delete_own_thread_even_when_it_has_replies(): void
     {
         $student = User::factory()->student()->create();
         $thread = QaThread::factory()
@@ -95,7 +95,7 @@ class QaThreadPolicyTest extends TestCase
             ->for($thread, 'thread')
             ->create();
 
-        $this->assertFalse((new QaThreadPolicy)->delete($student, $thread));
+        $this->assertTrue((new QaThreadPolicy)->delete($student, $thread));
     }
 
     public function test_student_can_resolve_own_unresolved_thread(): void

@@ -104,6 +104,18 @@ class QaThread extends Model
             return $query;
         }
 
-        return $query->where('body', 'LIKE', '%'.$keyword.'%');
+        return $query->where(function (Builder $query) use ($keyword): void {
+            $query
+                ->where('title', 'LIKE', '%'.$keyword.'%')
+                ->orWhere('body', 'LIKE', '%'.$keyword.'%')
+                ->orWhereHas(
+                    'replies',
+                    fn (Builder $query) => $query->where(
+                        'body',
+                        'LIKE',
+                        '%'.$keyword.'%',
+                    ),
+                );
+        });
     }
 }

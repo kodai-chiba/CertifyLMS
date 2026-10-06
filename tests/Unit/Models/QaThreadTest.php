@@ -161,29 +161,49 @@ class QaThreadTest extends TestCase
         $this->assertTrue($results->first()->is($unresolvedThread));
     }
 
-    public function test_keyword_scope_matches_body_only(): void
+    public function test_keyword_scope_matches_title_body_and_reply_body(): void
     {
-        $bodyMatchedThread = QaThread::factory()->create([
-            'title' => 'タイトルには検索語なし',
-            'body' => 'Laravelのルーティングについて教えてください。',
-        ]);
-
-        QaThread::factory()->create([
+        $titleMatchedThread = QaThread::factory()->create([
             'title' => 'Laravelについての質問',
             'body' => '本文には対象となる単語がありません。',
         ]);
 
-        QaThread::factory()->create([
+        $bodyMatchedThread = QaThread::factory()->create([
+            'title' => 'ルーティングについての質問',
+            'body' => 'Laravelのルーティングについて教えてください。',
+        ]);
+
+        $replyMatchedThread = QaThread::factory()->create([
+            'title' => 'フレームワークについての質問',
+            'body' => '使用方法について教えてください。',
+        ]);
+
+        QaReply::factory()
+            ->for($replyMatchedThread, 'thread')
+            ->create([
+                'body' => 'Laravelを使う方法があります。',
+            ]);
+
+        $unmatchedThread = QaThread::factory()->create([
             'title' => '別の質問',
             'body' => 'PHPの基本について教えてください。',
         ]);
+
+        QaReply::factory()
+            ->for($unmatchedThread, 'thread')
+            ->create([
+                'body' => 'PHPの基本構文について説明します。',
+            ]);
 
         $results = QaThread::query()
             ->keyword('Laravel')
             ->get();
 
-        $this->assertCount(1, $results);
-        $this->assertTrue($results->first()->is($bodyMatchedThread));
+        $this->assertCount(3, $results);
+        $this->assertTrue($results->contains($titleMatchedThread));
+        $this->assertTrue($results->contains($bodyMatchedThread));
+        $this->assertTrue($results->contains($replyMatchedThread));
+        $this->assertFalse($results->contains($unmatchedThread));
     }
 
     public function test_optional_filter_scopes_do_not_filter_when_value_is_empty(): void

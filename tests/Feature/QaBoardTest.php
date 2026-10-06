@@ -108,6 +108,56 @@ class QaBoardTest extends TestCase
         ]);
     }
 
+    public function test_student_can_delete_own_thread_when_it_has_no_replies(): void
+    {
+        $student = User::factory()->student()->inProgress()->create();
+
+        $thread = QaThread::factory()
+            ->for(Certification::factory()->published())
+            ->for($student)
+            ->create();
+
+        $this->actingAs($student)
+            ->delete(route('qa-board.destroy', $thread))
+            ->assertRedirect(route('qa-board.index'));
+
+        $this->assertDatabaseMissing('qa_threads', [
+            'id' => $thread->id,
+        ]);
+    }
+
+    public function test_student_cannot_delete_own_thread_when_it_has_replies(): void
+    {
+        $student = User::factory()->student()->inProgress()->create();
+
+        $thread = QaThread::factory()
+            ->for(Certification::factory()->published())
+            ->for($student)
+            ->create();
+
+        $reply = QaReply::factory()
+            ->for($thread, 'thread')
+            ->create();
+
+        $this->actingAs($student)
+            ->from(route('qa-board.show', $thread))
+            ->delete(route('qa-board.destroy', $thread))
+            ->assertRedirect(route('qa-board.show', $thread))
+            ->assertSessionHas(
+                'error',
+                '回答が存在する質問は削除できません。',
+            );
+
+        $this->assertDatabaseHas('qa_threads', [
+            'id' => $thread->id,
+        ]);
+
+        $this->assertDatabaseHas('qa_replies', [
+            'id' => $reply->id,
+            'qa_thread_id' => $thread->id,
+        ]);
+    }
+
     public function test_student_can_resolve_and_unresolve_own_thread(): void
     {
         $student = User::factory()->student()->inProgress()->create();
