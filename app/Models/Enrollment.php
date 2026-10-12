@@ -99,6 +99,16 @@ class Enrollment extends Model
     }
 
     /**
+     * 受講登録に紐づくコーチメモ。
+     *
+     * @return HasMany<EnrollmentNote, $this>
+     */
+    public function notes(): HasMany
+    {
+        return $this->hasMany(EnrollmentNote::class);
+    }
+
+    /**
      * 本受講登録をデフォルト資格として指している受講生(0 または 1 件)。
      * Enrollment は単一受講生に属するため、`defaultedByUser` も 1 件以下となる。
      *
