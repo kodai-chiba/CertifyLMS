@@ -29,18 +29,22 @@ class EnrollmentGoalPolicy
 
     /**
      * 目標を編集できるか判定する。
+     * 達成済みの目標は編集できない。
      */
     public function update(User $user, EnrollmentGoal $goal): bool
     {
-        return $this->isOwner($user, $goal);
+        return $this->isOwner($user, $goal)
+            && ! $goal->isAchieved();
     }
 
     /**
      * 目標を削除できるか判定する。
+     * 達成済みの目標は削除できない。
      */
     public function delete(User $user, EnrollmentGoal $goal): bool
     {
-        return $this->isOwner($user, $goal);
+        return $this->isOwner($user, $goal)
+            && ! $goal->isAchieved();
     }
 
     /**

@@ -121,4 +121,23 @@ class EnrollmentGoalPolicyTest extends TestCase
         $this->assertFalse($policy->markAchieved($admin, $goal));
         $this->assertFalse($policy->unmarkAchieved($admin, $goal));
     }
+
+    /**
+     * 達成済みの目標は編集・削除できず、達成状態のみ変更できる。
+     */
+    public function test_owner_student_cannot_update_or_delete_achieved_goal(): void
+    {
+        // Arrange
+        $student = User::factory()->student()->create();
+        $enrollment = Enrollment::factory()->for($student)->create();
+        $goal = EnrollmentGoal::factory()->forEnrollment($enrollment)->create([
+            'achieved_at' => now(),
+        ]);
+        $policy = new EnrollmentGoalPolicy;
+
+        // Act & Assert
+        $this->assertFalse($policy->update($student, $goal));
+        $this->assertFalse($policy->delete($student, $goal));
+        $this->assertTrue($policy->unmarkAchieved($student, $goal));
+    }
 }

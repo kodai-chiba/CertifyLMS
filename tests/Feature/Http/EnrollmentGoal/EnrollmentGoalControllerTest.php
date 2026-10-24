@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Http\EnrollmentGoal;
 
+use App\Enums\UserStatus;
 use App\Models\Enrollment;
 use App\Models\EnrollmentGoal;
 use App\Models\User;
@@ -548,4 +549,124 @@ class EnrollmentGoalControllerTest extends TestCase
         $response->assertRedirect(route('login'));
         $this->assertDatabaseCount('enrollment_goals', 0);
     }
+    /**
+     * 修了済み・退会済みの受講生は個人学習目標を登録できない。
+     */
+    public function test_graduated_and_withdrawn_students_cannot_store_goals(): void
+    {
+        foreach ([UserStatus::Graduated, UserStatus::Withdrawn] as $status) {
+            // Arrange
+            $student = User::factory()->student()->inProgress()->create();
+            $enrollment = Enrollment::factory()->for($student)->learning()->create();
+            $student->update(['status' => $status]);
+
+            // Act & Assert
+            $this->actingAs($student)
+                ->postJson(route('enrollments.goals.store', $enrollment), [
+                    'title' => '登録できない目標',
+                ])
+                ->assertForbidden();
+        }
+
+        $this->assertDatabaseCount('enrollment_goals', 0);
+    }
+
+    /**
+     * 修了済み・退会済みの受講生は既存目標の操作にもアクセスできない。
+     */
+    public function test_graduated_and_withdrawn_students_cannot_access_goal_routes(): void
+    {
+        foreach ([UserStatus::Graduated, UserStatus::Withdrawn] as $status) {
+            // Arrange
+            $student = User::factory()->student()->inProgress()->create();
+            $enrollment = Enrollment::factory()->for($student)->learning()->create();
+            $goal = EnrollmentGoal::factory()->forEnrollment($enrollment)->unachieved()->create();
+            $student->update(['status' => $status]);
+
+            // Act & Assert
+            $this->actingAs($student)->get(route('enrollment-goals.edit', $goal))->assertForbidden();
+            $this->actingAs($student)->patchJson(route('enrollment-goals.update', $goal), [
+                'title' => '変更不可',
+            ])->assertForbidden();
+            $this->actingAs($student)->deleteJson(route('enrollment-goals.destroy', $goal))->assertForbidden();
+            $this->actingAs($student)->postJson(route('enrollment-goals.markAchieved', $goal))->assertForbidden();
+            $this->actingAs($student)->deleteJson(route('enrollment-goals.unmarkAchieved', $goal))->assertForbidden();
+
+            $this->assertDatabaseHas('enrollment_goals', [
+                'id' => $goal->id,
+                'title' => $goal->title,
+                'achieved_at' => null,
+            ]);
+        }
+    }
+
+    /**
+     * 達成済みの目標は編集画面・更新・削除を禁止する。
+     */
+    public function test_achieved_goal_cannot_be_edited_updated_or_deleted(): void
+    {
+        // Arrange
+        $student = User::factory()->student()->inProgress()->create();
+        $enrollment = Enrollment::factory()->for($student)->learning()->create();
+        $goal = EnrollmentGoal::factory()->forEnrollment($enrollment)->achieved()->create([
+            'title' => '達成済みの目標',
+        ]);
+
+        // Act & Assert
+        $this->actingAs($student)->get(route('enrollment-goals.edit', $goal))->assertForbidden();
+        $this->actingAs($student)->patchJson(route('enrollment-goals.update', $goal), [
+            'title' => '不正な更新',
+        ])->assertForbidden();
+        $this->actingAs($student)->deleteJson(route('enrollment-goals.destroy', $goal))->assertForbidden();
+
+        $this->assertDatabaseHas('enrollment_goals', [
+            'id' => $goal->id,
+            'title' => '達成済みの目標',
+        ]);
+    }
+
+    /**
+     * 目標期日に過去日付を指定して登録できる。
+     */
+    public function test_store_accepts_past_target_date(): void
+    {
+        // Arrange
+        $student = User::factory()->student()->inProgress()->create();
+        $enrollment = Enrollment::factory()->for($student)->learning()->create();
+        $pastDate = now()->subYear()->toDateString();
+
+        // Act
+        $response = $this->actingAs($student)->post(route('enrollments.goals.store', $enrollment), [
+            'title' => '過去の日付の目標',
+            'target_date' => $pastDate,
+        ]);
+
+        // Assert
+        $response->assertRedirect(route('enrollments.show', $enrollment));
+        $this->assertDatabaseHas('enrollment_goals', [
+            'enrollment_id' => $enrollment->id,
+            'title' => '過去の日付の目標',
+            'target_date' => $pastDate,
+        ]);
+    }
+
+    /**
+     * 同じ受講登録に複数の目標を追加できる。
+     */
+    public function test_owner_student_can_store_multiple_goals_for_one_enrollment(): void
+    {
+        // Arrange
+        $student = User::factory()->student()->inProgress()->create();
+        $enrollment = Enrollment::factory()->for($student)->learning()->create();
+
+        // Act & Assert
+        foreach (range(1, 5) as $number) {
+            $this->actingAs($student)->post(route('enrollments.goals.store', $enrollment), [
+                'title' => '学習目標'.$number,
+            ])->assertRedirect(route('enrollments.show', $enrollment));
+        }
+
+        $this->assertSame(5, $enrollment->goals()->count());
+    }
+
 }
