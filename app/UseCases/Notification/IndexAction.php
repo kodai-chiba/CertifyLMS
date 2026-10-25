@@ -27,7 +27,7 @@ final class IndexAction
         return [
             'notifications' => $notifications
                 ->orderByDesc('created_at')
-                ->paginate(15)
+                ->paginate(20)
                 ->withQueryString(),
             'unreadCount' => $user->unreadNotifications()->count(),
             'tab' => $tab,

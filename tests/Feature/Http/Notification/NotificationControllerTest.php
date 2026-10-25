@@ -236,4 +236,80 @@ class NotificationControllerTest extends TestCase
         $this->getJson(route('notifications.feed'))
             ->assertUnauthorized();
     }
+
+    public function test_notification_index_paginates_twenty_items(): void
+    {
+        $user = User::factory()->student()->inProgress()->create();
+
+        for ($i = 1; $i <= 21; $i++) {
+            $this->createNotification($user, "通知{$i}");
+        }
+
+        $response = $this->actingAs($user)
+            ->get(route('notifications.index'));
+
+        $response
+            ->assertOk()
+            ->assertViewHas('notifications', function ($notifications): bool {
+                return $notifications->count() === 20
+                    && $notifications->perPage() === 20
+                    && $notifications->total() === 21
+                    && $notifications->lastPage() === 2;
+            });
+    }
+
+    public function test_notification_index_displays_remaining_item_on_second_page(): void
+    {
+        $user = User::factory()->student()->inProgress()->create();
+
+        for ($i = 1; $i <= 21; $i++) {
+            $this->createNotification($user, "通知{$i}");
+        }
+
+        $this->actingAs($user)
+            ->get(route('notifications.index', ['page' => 2]))
+            ->assertOk()
+            ->assertViewHas('notifications', function ($notifications): bool {
+                return $notifications->count() === 1
+                    && $notifications->currentPage() === 2
+                    && $notifications->total() === 21;
+            });
+    }
+
+    public function test_notification_feed_displays_newest_twenty_items_first(): void
+    {
+        $user = User::factory()->student()->inProgress()->create();
+
+        $oldestId = null;
+        $newestId = null;
+
+        for ($i = 1; $i <= 21; $i++) {
+            $id = $this->createNotification($user, "通知{$i}");
+
+            $user->notifications()
+                ->where('id', $id)
+                ->update([
+                    'created_at' => now()->subMinutes(21 - $i),
+                ]);
+
+            if ($i === 1) {
+                $oldestId = $id;
+            }
+
+            if ($i === 21) {
+                $newestId = $id;
+            }
+        }
+
+        $response = $this->actingAs($user)
+            ->getJson(route('notifications.feed'))
+            ->assertOk()
+            ->assertJsonPath('unread_count', 21)
+            ->assertJsonCount(20, 'notifications')
+            ->assertJsonPath('notifications.0.id', $newestId);
+
+        $response->assertJsonMissing([
+            'id' => $oldestId,
+        ]);
+    }
 }

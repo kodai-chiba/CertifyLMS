@@ -214,7 +214,6 @@ Route::middleware(['auth', 'role:admin'])->prefix('admin')->group(function () {
     Route::post('plans/{plan}/unarchive', [PlanController::class, 'unarchive'])
         ->name('admin.plans.unarchive');
 
-
     // 面談パックマスタ管理
     Route::get('meeting-packs', [MeetingPackController::class, 'index'])
         ->name('admin.meeting-packs.index');
