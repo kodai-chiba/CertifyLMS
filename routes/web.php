@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Http\Controllers\AnnouncementController;
 use App\Http\Controllers\Auth\OnboardingController;
 use App\Http\Controllers\BrowseController;
 use App\Http\Controllers\CertificationCatalogController;
@@ -81,6 +82,8 @@ Route::middleware('auth')->group(function () {
         ->name('notifications.markAllAsRead');
     Route::post('notifications/{notification}/read', [NotificationController::class, 'markAsRead'])
         ->name('notifications.markAsRead');
+    Route::get('notifications/{notification}', [NotificationController::class, 'show'])
+        ->name('notifications.show');
 
     // 受講登録(3 ロール共有: student=自分のみ / coach=担当範囲 / admin=全件)。
     // 認可は EnrollmentPolicy::viewAny / view で 3 ロール対応済。閲覧範囲は EnrollmentController で
@@ -165,6 +168,16 @@ Route::middleware(['auth', 'role:student', 'active-learning'])
 // admin 専用ルート
 // ============================================================
 Route::middleware(['auth', 'role:admin'])->prefix('admin')->group(function () {
+    // お知らせ配信管理（管理者のみ）
+    Route::get('announcements', [AnnouncementController::class, 'index'])
+        ->name('admin.announcements.index');
+    Route::get('announcements/create', [AnnouncementController::class, 'create'])
+        ->name('admin.announcements.create');
+    Route::post('announcements', [AnnouncementController::class, 'store'])
+        ->name('admin.announcements.store');
+    Route::get('announcements/{announcement}', [AnnouncementController::class, 'show'])
+        ->name('admin.announcements.show');
+
     // ユーザー管理
     Route::get('users', [UserController::class, 'index'])->name('admin.users.index');
     Route::get('users/{user}', [UserController::class, 'show'])
