@@ -9,7 +9,8 @@ use App\Models\Meeting;
 use Illuminate\Foundation\Http\FormRequest;
 
 /**
- * 受講生本人の面談履歴一覧リクエスト。filter のクエリ受け取り + viewAny 認可のみを行う。
+ * 受講生本人の面談履歴一覧リクエスト。
+ * filter / tab のクエリ受け取り + viewAny 認可を行う。
  *
  * @see MeetingController::index()
  */
@@ -27,6 +28,7 @@ class IndexRequest extends FormRequest
     {
         return [
             'filter' => ['nullable', 'in:upcoming,past,all'],
+            'tab' => ['nullable', 'in:upcoming,past,all'],
         ];
     }
 }

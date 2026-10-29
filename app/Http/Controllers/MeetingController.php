@@ -49,11 +49,14 @@ use Throwable;
 class MeetingController extends Controller
 {
     /**
-     * 受講生本人の面談一覧。filter (upcoming/past/all) クエリで履歴を切り替える。
+     * 受講生本人の面談一覧。
+     * tab を優先し、指定がなければ filter、さらに未指定なら upcoming を使用する。
      */
     public function index(IndexRequest $request, MeetingQuotaService $meetingQuota): View
     {
-        $filter = $request->validated('filter') ?? 'upcoming';
+        $filter = $request->validated('tab')
+            ?? $request->validated('filter')
+            ?? 'upcoming';
 
         $query = Meeting::query()
             ->with(['enrollment.certification', 'coach'])
@@ -75,11 +78,16 @@ class MeetingController extends Controller
 
     /**
      * コーチ宛の面談一覧。担当受講生 / 受講登録での絞り込みを併せて提供する。
+     * tab を優先し、指定がなければ filter、さらに未指定なら upcoming を使用する。
      */
     public function indexAsCoach(IndexAsCoachRequest $request): View
     {
         $filters = $request->validated();
-        $filter = $filters['filter'] ?? 'upcoming';
+
+        $filter = $filters['tab']
+            ?? $filters['filter']
+            ?? 'upcoming';
+
         $studentId = $filters['student'] ?? null;
         $enrollmentId = $filters['enrollment'] ?? null;
 
@@ -162,6 +170,31 @@ class MeetingController extends Controller
     }
 
     /**
+     * 予約画面が呼ぶ空き枠取得 JSON エンドポイント。
+     */
+    public function fetchAvailability(
+        Enrollment $enrollment,
+        AvailabilityRequest $request,
+        MeetingAvailabilityService $availabilityService
+    ): JsonResponse {
+        $date = Carbon::parse($request->validated('date'));
+
+        $slots = $availabilityService->slotsForCertification(
+            $enrollment->loadMissing('certification')->certification,
+            $date,
+        );
+
+        return response()->json([
+            'date' => $date->toDateString(),
+            'slots' => $slots->map(fn (array $slot) => [
+                'slot_start' => $slot['slot_start']->toIso8601String(),
+                'slot_end' => $slot['slot_end']->toIso8601String(),
+                'available_coach_count' => $slot['available_coach_count'],
+            ])->all(),
+        ]);
+    }
+
+    /**
      * 受講生の予約申請。残面談回数を確認し、空き枠から過去実績最少のコーチを自動割当して reserved で確定する。
      * 同時刻 race condition は (coach_id, scheduled_at) UNIQUE 違反として検知し 409 へ変換する。
      */
@@ -194,6 +227,7 @@ class MeetingController extends Controller
             $availabilityService->validateSlot($enrollment->certification, $scheduledAt);
 
             $candidates = $this->findAvailableCoaches($enrollment->certification, $scheduledAt);
+
             if ($candidates->isEmpty()) {
                 throw new MeetingNoAvailableCoachException;
             }
@@ -211,7 +245,7 @@ class MeetingController extends Controller
                     'meeting_url_snapshot' => $coach->meeting_url,
                 ]);
             } catch (UniqueConstraintViolationException $e) {
-                // 同時刻に他受講生が先行予約した race condition: UNIQUE(coach_id, scheduled_at) で弾かれた
+                // 同時刻に他受講生が先行予約した race condition: UNIQUE(coach_id, scheduled_at) 違反
                 throw new MeetingNoAvailableCoachException($e);
             }
 
@@ -352,27 +386,6 @@ class MeetingController extends Controller
         return redirect()
             ->route('meetings.show', $meeting)
             ->with('success', '面談メモを保存しました。');
-    }
-
-    /**
-     * 予約画面が呼ぶ空き枠取得 JSON エンドポイント。
-     */
-    public function fetchAvailability(Enrollment $enrollment, AvailabilityRequest $request, MeetingAvailabilityService $availabilityService): JsonResponse
-    {
-        $date = Carbon::parse($request->validated('date'));
-        $slots = $availabilityService->slotsForCertification(
-            $enrollment->loadMissing('certification')->certification,
-            $date,
-        );
-
-        return response()->json([
-            'date' => $date->toDateString(),
-            'slots' => $slots->map(fn (array $slot) => [
-                'slot_start' => $slot['slot_start']->toIso8601String(),
-                'slot_end' => $slot['slot_end']->toIso8601String(),
-                'available_coach_count' => $slot['available_coach_count'],
-            ])->all(),
-        ]);
     }
 
     /**
