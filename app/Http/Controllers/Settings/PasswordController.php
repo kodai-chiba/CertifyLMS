@@ -38,6 +38,6 @@ class PasswordController extends Controller
 
         return redirect()
             ->route('settings.profile.show', ['tab' => 'password'])
-            ->with('success', 'パスワードを変更しました。');
+            ->with('success', 'パスワードを更新しました。');
     }
 }

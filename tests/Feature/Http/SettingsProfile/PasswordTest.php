@@ -52,7 +52,12 @@ class PasswordTest extends TestCase
         $response->assertRedirect(
             route('settings.profile.show', ['tab' => 'password'])
         );
-        $response->assertSessionHas('success');
+
+        $response->assertSessionHas(
+            'success',
+            'パスワードを更新しました。'
+        );
+
         $response->assertSessionHasNoErrors();
 
         $this->assertTrue(
