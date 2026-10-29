@@ -44,6 +44,9 @@ use App\Http\Controllers\SectionQuestionController;
 use App\Http\Controllers\SectionQuizController;
 use App\Http\Controllers\SectionQuizResultController;
 use App\Http\Controllers\Settings\AvailabilityController as SettingsAvailabilityController;
+use App\Http\Controllers\Settings\AvatarController;
+use App\Http\Controllers\Settings\PasswordController;
+use App\Http\Controllers\Settings\ProfileController;
 use App\Http\Controllers\Settings\SettingsDefaultEnrollmentController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\WeakDrillController;
@@ -91,6 +94,20 @@ Route::middleware('auth')->group(function () {
         ->withTrashed()
         ->name('enrollments.show');
 });
+
+// ============================================================
+// 全ロール共通 — プロフィール設定(修了済み受講生も利用可能)
+// ============================================================
+Route::middleware('auth')
+    ->prefix('settings')
+    ->name('settings.')
+    ->group(function () {
+        Route::get('profile', [ProfileController::class, 'show'])->name('profile.show');
+        Route::patch('profile', [ProfileController::class, 'update'])->name('profile.update');
+        Route::post('avatar', [AvatarController::class, 'store'])->name('avatar.store');
+        Route::delete('avatar', [AvatarController::class, 'destroy'])->name('avatar.destroy');
+        Route::put('password', [PasswordController::class, 'update'])->name('password.update');
+    });
 
 // ============================================================
 // 受講生専用ルート(受講中ステータスのみ通過、卒業ステータスはロック)
