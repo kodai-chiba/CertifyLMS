@@ -14,6 +14,9 @@ use Illuminate\Support\Facades\DB;
  * 受講生による受講解除(SoftDelete) Action。learning 状態の Enrollment のみ削除可。
  * passed / failed は履歴として残すため拒否する。
  *
+ * Enrollment の SoftDelete では DB の ON DELETE CASCADE が発火しないため、
+ * 紐づく個人学習目標は受講解除時に明示的に物理削除する。
+ *
  * 当該 Enrollment が受講生のデフォルト資格だった場合は、他の learning|passed 残存件数で自動振替 / NULL リセット。
  */
 final class DestroyAction
@@ -34,6 +37,7 @@ final class DestroyAction
         DB::transaction(function () use ($enrollment) {
             $user = $enrollment->user;
 
+            $enrollment->goals()->delete();
             $enrollment->delete();
 
             $this->defaultEnrollmentService->resolveAfterStatusChange($user, $enrollment);
