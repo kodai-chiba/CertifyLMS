@@ -57,6 +57,27 @@ class NotificationController extends Controller
     }
 
     /**
+     * 指定された通知の詳細を表示する。
+     *
+     * 通知の受信者本人のみ閲覧可能。
+     * 詳細表示時に既読にする。
+     */
+    public function show(
+        Request $request,
+        string $notification,
+        MarkAsReadAction $action,
+    ): View {
+        $notification = $action(
+            user: $request->user(),
+            notificationId: $notification,
+        );
+
+        return view('notifications.show', [
+            'notification' => $notification,
+        ]);
+    }
+
+    /**
      * 指定された通知を既読にする。
      */
     public function markAsRead(
