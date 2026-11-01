@@ -13,6 +13,7 @@ use App\Models\User;
 use App\UseCases\Announcement\DispatchAnnouncementAction;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
+use Throwable;
 
 class AnnouncementController extends Controller
 {
@@ -65,10 +66,19 @@ class AnnouncementController extends Controller
         StoreAnnouncementRequest $request,
         DispatchAnnouncementAction $dispatchAnnouncement
     ): RedirectResponse {
-        $announcement = $dispatchAnnouncement(
-            $request->user(),
-            $request->validated()
-        );
+        try {
+            $announcement = $dispatchAnnouncement(
+                $request->user(),
+                $request->validated()
+            );
+        } catch (Throwable $e) {
+            report($e);
+
+            return redirect()
+                ->back()
+                ->withInput()
+                ->with('error', 'お知らせの配信に失敗しました。時間をおいて再度お試しください。');
+        }
 
         return redirect()
             ->route('admin.announcements.show', $announcement)

@@ -5,13 +5,17 @@ declare(strict_types=1);
 namespace Tests\Feature\Http\Announcement;
 
 use App\Enums\AnnouncementTargetType;
+use App\Enums\EnrollmentStatus;
 use App\Models\Announcement;
 use App\Models\Certification;
 use App\Models\Enrollment;
 use App\Models\User;
 use App\Notifications\AdminAnnouncementNotification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Notifications\Channels\MailChannel;
 use Illuminate\Support\Facades\Notification;
+use Mockery;
+use RuntimeException;
 use Tests\TestCase;
 
 class StoreTest extends TestCase
@@ -53,8 +57,16 @@ class StoreTest extends TestCase
         $this->assertSame(AnnouncementTargetType::AllStudents, $announcement->target_type);
         $this->assertNotNull($announcement->dispatched_at);
 
-        Notification::assertSentTo([$firstStudent, $secondStudent], AdminAnnouncementNotification::class);
-        Notification::assertNotSentTo([$graduatedStudent, $coach, $admin], AdminAnnouncementNotification::class);
+        Notification::assertSentTo(
+            [$firstStudent, $secondStudent],
+            AdminAnnouncementNotification::class
+        );
+
+        Notification::assertNotSentTo(
+            [$graduatedStudent, $coach, $admin],
+            AdminAnnouncementNotification::class
+        );
+
         Notification::assertCount(2);
     }
 
@@ -63,8 +75,10 @@ class StoreTest extends TestCase
         Notification::fake();
 
         $admin = User::factory()->admin()->create();
+
         $targetCertification = Certification::factory()->published()->create();
         $otherCertification = Certification::factory()->published()->create();
+
         $targetStudent = User::factory()->student()->inProgress()->create();
         $otherStudent = User::factory()->student()->inProgress()->create();
         $graduatedStudent = User::factory()->student()->graduated()->create();
@@ -73,10 +87,12 @@ class StoreTest extends TestCase
             'user_id' => $targetStudent->id,
             'certification_id' => $targetCertification->id,
         ]);
+
         Enrollment::factory()->create([
             'user_id' => $otherStudent->id,
             'certification_id' => $otherCertification->id,
         ]);
+
         Enrollment::factory()->create([
             'user_id' => $graduatedStudent->id,
             'certification_id' => $targetCertification->id,
@@ -93,8 +109,67 @@ class StoreTest extends TestCase
 
         $this->assertSame(1, $announcement->dispatched_count);
         $this->assertSame($targetCertification->id, $announcement->target_certification_id);
+
         Notification::assertSentTo($targetStudent, AdminAnnouncementNotification::class);
-        Notification::assertNotSentTo([$otherStudent, $graduatedStudent], AdminAnnouncementNotification::class);
+
+        Notification::assertNotSentTo(
+            [$otherStudent, $graduatedStudent],
+            AdminAnnouncementNotification::class
+        );
+
+        Notification::assertCount(1);
+    }
+
+    public function test_certification_dispatch_excludes_passed_and_failed_enrollments(): void
+    {
+        Notification::fake();
+
+        $admin = User::factory()->admin()->create();
+        $certification = Certification::factory()->published()->create();
+
+        $learningStudent = User::factory()->student()->inProgress()->create();
+        $passedStudent = User::factory()->student()->inProgress()->create();
+        $failedStudent = User::factory()->student()->inProgress()->create();
+
+        Enrollment::factory()->create([
+            'user_id' => $learningStudent->id,
+            'certification_id' => $certification->id,
+            'status' => EnrollmentStatus::Learning,
+        ]);
+
+        Enrollment::factory()->create([
+            'user_id' => $passedStudent->id,
+            'certification_id' => $certification->id,
+            'status' => EnrollmentStatus::Passed,
+        ]);
+
+        Enrollment::factory()->create([
+            'user_id' => $failedStudent->id,
+            'certification_id' => $certification->id,
+            'status' => EnrollmentStatus::Failed,
+        ]);
+
+        $this->actingAs($admin)
+            ->post(route('admin.announcements.store'), $this->payload([
+                'target_type' => AnnouncementTargetType::Certification->value,
+                'target_certification_id' => $certification->id,
+            ]))
+            ->assertRedirect();
+
+        $announcement = Announcement::query()->sole();
+
+        $this->assertSame(1, $announcement->dispatched_count);
+
+        Notification::assertSentTo(
+            $learningStudent,
+            AdminAnnouncementNotification::class
+        );
+
+        Notification::assertNotSentTo(
+            [$passedStudent, $failedStudent],
+            AdminAnnouncementNotification::class
+        );
+
         Notification::assertCount(1);
     }
 
@@ -117,8 +192,10 @@ class StoreTest extends TestCase
 
         $this->assertSame(1, $announcement->dispatched_count);
         $this->assertSame($targetStudent->id, $announcement->target_user_id);
+
         Notification::assertSentTo($targetStudent, AdminAnnouncementNotification::class);
         Notification::assertNotSentTo($otherStudent, AdminAnnouncementNotification::class);
+
         Notification::assertCount(1);
     }
 
@@ -137,6 +214,7 @@ class StoreTest extends TestCase
             ->assertSessionHasErrors('target_certification_id');
 
         $this->assertDatabaseCount('announcements', 0);
+
         Notification::assertNothingSent();
     }
 
@@ -155,6 +233,7 @@ class StoreTest extends TestCase
             ->assertSessionHasErrors(['title', 'body', 'target_type']);
 
         $this->assertDatabaseCount('announcements', 0);
+
         Notification::assertNothingSent();
     }
 
@@ -169,6 +248,37 @@ class StoreTest extends TestCase
             ->assertForbidden();
 
         $this->assertDatabaseCount('announcements', 0);
+
         Notification::assertNothingSent();
+    }
+
+    public function test_mail_failure_rolls_back_announcement_and_database_notifications(): void
+    {
+        $admin = User::factory()->admin()->create();
+        User::factory()->student()->inProgress()->create();
+
+        $mailChannel = Mockery::mock(MailChannel::class);
+
+        $mailChannel->shouldReceive('send')
+            ->once()
+            ->andThrow(new RuntimeException('SMTP connection failed'));
+
+        $this->app->instance(MailChannel::class, $mailChannel);
+
+        $payload = $this->payload();
+
+        $this->actingAs($admin)
+            ->from(route('admin.announcements.create'))
+            ->post(route('admin.announcements.store'), $payload)
+            ->assertRedirect(route('admin.announcements.create'))
+            ->assertSessionHas(
+                'error',
+                'お知らせの配信に失敗しました。時間をおいて再度お試しください。'
+            )
+            ->assertSessionHas('_old_input.title', $payload['title'])
+            ->assertSessionMissing('success');
+
+        $this->assertDatabaseCount('announcements', 0);
+        $this->assertDatabaseCount('notifications', 0);
     }
 }

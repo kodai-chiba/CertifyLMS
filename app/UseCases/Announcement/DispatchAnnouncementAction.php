@@ -15,8 +15,6 @@ use Illuminate\Support\Facades\DB;
 class DispatchAnnouncementAction
 {
     /**
-     * お知らせを配信する。
-     *
      * @param array<string, mixed> $data
      */
     public function __invoke(User $admin, array $data): Announcement
@@ -29,10 +27,9 @@ class DispatchAnnouncementAction
 
         if ($targetType === AnnouncementTargetType::Certification) {
             $recipients->whereHas('enrollments', function ($query) use ($data) {
-                $query->where(
-                    'certification_id',
-                    $data['target_certification_id']
-                );
+                $query
+                    ->where('certification_id', $data['target_certification_id'])
+                    ->learning();
             });
         }
 
@@ -42,12 +39,7 @@ class DispatchAnnouncementAction
 
         $recipientIds = $recipients->pluck('id');
 
-        $announcement = DB::transaction(function () use (
-            $admin,
-            $data,
-            $targetType,
-            $recipientIds
-        ): Announcement {
+        return DB::transaction(function () use ($admin, $data, $targetType, $recipientIds): Announcement {
             $announcement = Announcement::create([
                 'title' => $data['title'],
                 'body' => $data['body'],
@@ -59,23 +51,24 @@ class DispatchAnnouncementAction
                     ? $data['target_user_id']
                     : null,
                 'created_by' => $admin->id,
+                'dispatched_count' => 0,
+                'dispatched_at' => null,
+            ]);
+
+            User::query()
+                ->whereKey($recipientIds)
+                ->chunkById(100, function ($users) use ($announcement): void {
+                    foreach ($users as $user) {
+                        $user->notify(new AdminAnnouncementNotification($announcement));
+                    }
+                });
+
+            $announcement->update([
                 'dispatched_count' => $recipientIds->count(),
                 'dispatched_at' => now(),
             ]);
 
             return $announcement;
         });
-
-        User::query()
-            ->whereKey($recipientIds)
-            ->chunkById(100, function ($users) use ($announcement): void {
-                foreach ($users as $user) {
-                    $user->notify(
-                        new AdminAnnouncementNotification($announcement)
-                    );
-                }
-            });
-
-        return $announcement;
     }
 }
