@@ -39,7 +39,7 @@ class SendMeetingRemindersCommand extends Command
         $now = now();
 
         if ($window === 'eve') {
-            // 暫定仕様：翌日に開始する面談を対象とする
+            // 翌日に開始する面談を対象とする
             $start = $now->copy()->addDay()->startOfDay();
             $end = $start->copy()->addDay();
         } else {
@@ -52,33 +52,38 @@ class SendMeetingRemindersCommand extends Command
         $sentCount = 0;
         $failedCount = 0;
 
-        Meeting::query()
+        $query = Meeting::query()
             ->where('status', MeetingStatus::Reserved->value)
             ->where('scheduled_at', '>=', $start)
-            ->where('scheduled_at', '<', $end)
-            ->orderBy('id')
-            ->chunk(100, function ($meetings) use (
-                $action,
-                $window,
-                &$meetingCount,
-                &$sentCount,
-                &$failedCount,
-            ): void {
-                foreach ($meetings as $meeting) {
-                    $meetingCount++;
+            ->where('scheduled_at', '<', $end);
 
-                    try {
-                        $sentCount += $action($meeting, $window);
-                    } catch (Throwable $exception) {
-                        report($exception);
-                        $failedCount++;
+        if ($window === 'eve') {
+            // 面談前日・当日の予約には前日リマインダーを送らない
+            $query->where('created_at', '<', $now->copy()->startOfDay());
+        }
 
-                        $this->error(
-                            '面談ID '.$meeting->id.' の通知処理に失敗しました。'
-                        );
-                    }
+        $query->chunkById(100, function ($meetings) use (
+            $action,
+            $window,
+            &$meetingCount,
+            &$sentCount,
+            &$failedCount,
+        ): void {
+            foreach ($meetings as $meeting) {
+                $meetingCount++;
+
+                try {
+                    $sentCount += $action($meeting, $window);
+                } catch (Throwable $exception) {
+                    report($exception);
+                    $failedCount++;
+
+                    $this->error(
+                        '面談ID '.$meeting->id.' の通知処理に失敗しました。'
+                    );
                 }
-            });
+            }
+        });
 
         $this->info('対象面談数：'.$meetingCount);
         $this->info('送信成功チャンネル数：'.$sentCount);

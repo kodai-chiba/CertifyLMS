@@ -35,11 +35,20 @@ class FailExpiredEnrollmentsCommand extends Command
             ->where('status', EnrollmentStatus::Learning->value)
             ->whereNotNull('exam_date')
             ->whereDate('exam_date', '<', now()->toDateString())
-            ->orderBy('id')
-            ->chunk(100, function ($enrollments) use ($statusChanger, $defaultEnrollmentService, &$count): void {
+            ->chunkById(100, function ($enrollments) use (
+                $statusChanger,
+                $defaultEnrollmentService,
+                &$count,
+            ): void {
                 foreach ($enrollments as $enrollment) {
-                    DB::transaction(function () use ($enrollment, $statusChanger, $defaultEnrollmentService) {
-                        $enrollment->update(['status' => EnrollmentStatus::Failed->value]);
+                    DB::transaction(function () use (
+                        $enrollment,
+                        $statusChanger,
+                        $defaultEnrollmentService,
+                    ): void {
+                        $enrollment->update([
+                            'status' => EnrollmentStatus::Failed->value,
+                        ]);
 
                         $statusChanger->recordStatusChange(
                             $enrollment,
@@ -54,6 +63,7 @@ class FailExpiredEnrollmentsCommand extends Command
                             $enrollment,
                         );
                     });
+
                     $count++;
                 }
             });
