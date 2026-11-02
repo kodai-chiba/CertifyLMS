@@ -549,6 +549,7 @@ class EnrollmentGoalControllerTest extends TestCase
         $response->assertRedirect(route('login'));
         $this->assertDatabaseCount('enrollment_goals', 0);
     }
+
     /**
      * 修了済み・退会済みの受講生は個人学習目標を登録できない。
      */
@@ -668,5 +669,4 @@ class EnrollmentGoalControllerTest extends TestCase
 
         $this->assertSame(5, $enrollment->goals()->count());
     }
-
 }
