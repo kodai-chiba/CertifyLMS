@@ -6,6 +6,7 @@ namespace App\Policies;
 
 use App\Enums\MeetingStatus;
 use App\Enums\UserRole;
+use App\Enums\UserStatus;
 use App\Models\Meeting;
 use App\Models\User;
 
@@ -14,7 +15,7 @@ use App\Models\User;
  *
  * - viewAny: 全ロール true(取得スコープは IndexAction 側で coach_id / student_id 単位に絞る)
  * - view: 当事者(coach / student)または admin のみ
- * - create: 受講生のみ(コーチは自動割当の被選出側、admin は介入なし)
+ * - create: 受講中の受講生のみ(コーチは自動割当の被選出側、admin は介入なし)
  * - cancel: 当事者かつ reserved 状態の Meeting のみ
  * - upsertMemo: 担当コーチかつ reserved / completed 状態(canceled の Meeting にはメモを残せない)
  */
@@ -36,7 +37,8 @@ class MeetingPolicy
 
     public function create(User $user): bool
     {
-        return $user->role === UserRole::Student;
+        return $user->role === UserRole::Student
+            && $user->status === UserStatus::InProgress;
     }
 
     public function cancel(User $user, Meeting $meeting): bool

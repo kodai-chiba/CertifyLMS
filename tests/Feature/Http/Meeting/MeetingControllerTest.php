@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Http\Meeting;
 
+use App\Enums\EnrollmentStatus;
 use App\Enums\MeetingQuotaTransactionType;
 use App\Enums\MeetingStatus;
 use App\Models\Certification;
@@ -115,6 +116,30 @@ class MeetingControllerTest extends TestCase
         ]);
     }
 
+    public function test_store_rejects_enrollments_that_are_not_learning(): void
+    {
+        $student = User::factory()->student()->inProgress()->create(['max_meetings' => 3]);
+        $scheduledAt = now()->addDays(3)->startOfHour();
+
+        foreach ([EnrollmentStatus::Passed, EnrollmentStatus::Failed] as $status) {
+            $certification = Certification::factory()->published()->create();
+            $enrollment = Enrollment::factory()
+                ->for($student, 'user')
+                ->for($certification)
+                ->learning()
+                ->create(['status' => $status]);
+
+            $this->actingAs($student)->post(route('meetings.store', $enrollment), [
+                'scheduled_at' => $scheduledAt->format('Y-m-d\TH:i:s'),
+                'topic' => '相談したい',
+            ])->assertForbidden();
+
+            $this->assertDatabaseMissing('meetings', ['enrollment_id' => $enrollment->id]);
+        }
+
+        $this->assertDatabaseCount('meetings', 0);
+    }
+
     public function test_store_rejects_non_zero_minutes(): void
     {
         $student = User::factory()->student()->inProgress()->create(['max_meetings' => 3]);
@@ -182,6 +207,176 @@ class MeetingControllerTest extends TestCase
         $response->assertViewIs('meeting.coach.index');
         $response->assertViewHas('meetings', fn ($meetings) => $meetings->contains('id', $own->id)
             && ! $meetings->contains('id', $other->id));
+    }
+
+    public function test_student_index_upcoming_tab_filter(): void
+    {
+        $student = User::factory()->student()->inProgress()->create();
+        $coach = User::factory()->coach()->create();
+        $upcoming = Meeting::factory()->reserved()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->addDays(3)->startOfHour(),
+        ]);
+        $past = Meeting::factory()->completed()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->subDays(3)->startOfHour(),
+        ]);
+
+        $response = $this->actingAs($student)->get(route('meetings.index').'?tab=upcoming');
+
+        $response->assertOk();
+        $response->assertViewHas('meetings', fn ($meetings) => $meetings->contains('id', $upcoming->id) && ! $meetings->contains('id', $past->id));
+    }
+
+    public function test_student_index_past_tab_filter(): void
+    {
+        $student = User::factory()->student()->inProgress()->create();
+        $coach = User::factory()->coach()->create();
+        $upcoming = Meeting::factory()->reserved()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->addDays(3)->startOfHour(),
+        ]);
+        $past = Meeting::factory()->completed()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->subDays(3)->startOfHour(),
+        ]);
+
+        $response = $this->actingAs($student)->get(route('meetings.index').'?tab=past');
+
+        $response->assertOk();
+        $response->assertViewHas('meetings', fn ($meetings) => $meetings->contains('id', $past->id) && ! $meetings->contains('id', $upcoming->id));
+    }
+
+    public function test_student_index_all_tab_filter(): void
+    {
+        $student = User::factory()->student()->inProgress()->create();
+        $coach = User::factory()->coach()->create();
+        $upcoming = Meeting::factory()->reserved()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->addDays(3)->startOfHour(),
+        ]);
+        $past = Meeting::factory()->completed()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->subDays(3)->startOfHour(),
+        ]);
+
+        $response = $this->actingAs($student)->get(route('meetings.index').'?tab=all');
+
+        $response->assertOk();
+        $response->assertViewHas('meetings', fn ($meetings) => $meetings->contains('id', $past->id) && $meetings->contains('id', $upcoming->id));
+    }
+
+    public function test_student_index_precedence_tab_filter(): void
+    {
+        $student = User::factory()->student()->inProgress()->create();
+        $coach = User::factory()->coach()->create();
+        $upcoming = Meeting::factory()->reserved()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->addDays(3)->startOfHour(),
+        ]);
+        $past = Meeting::factory()->completed()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->subDays(3)->startOfHour(),
+        ]);
+
+        $response = $this->actingAs($student)->get(route('meetings.index').'?tab=past&filter=upcoming');
+
+        $response->assertOk();
+        $response->assertViewHas('meetings', fn ($meetings) => $meetings->contains('id', $past->id) && ! $meetings->contains('id', $upcoming->id));
+    }
+
+    public function test_student_index_supports_legacy_filter(): void
+    {
+        $student = User::factory()->student()->inProgress()->create();
+        $coach = User::factory()->coach()->create();
+        $upcoming = Meeting::factory()->reserved()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->addDays(3)->startOfHour(),
+        ]);
+        $past = Meeting::factory()->completed()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->subDays(3)->startOfHour(),
+        ]);
+
+        $response = $this->actingAs($student)->get(route('meetings.index').'?filter=past');
+
+        $response->assertOk();
+        $response->assertViewHas('meetings', fn ($meetings) => $meetings->contains('id', $past->id) && ! $meetings->contains('id', $upcoming->id));
+    }
+
+    public function test_coach_index_upcoming_tab_filter(): void
+    {
+        $student = User::factory()->student()->inProgress()->create();
+        $coach = User::factory()->coach()->create();
+        $upcoming = Meeting::factory()->reserved()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->addDays(3)->startOfHour(),
+        ]);
+        $past = Meeting::factory()->completed()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->subDays(3)->startOfHour(),
+        ]);
+
+        $response = $this->actingAs($coach)->get(route('coach.meetings.index').'?tab=upcoming');
+
+        $response->assertOk();
+        $response->assertViewHas('meetings', fn ($meetings) => $meetings->contains('id', $upcoming->id) && ! $meetings->contains('id', $past->id));
+    }
+
+    public function test_coach_index_past_tab_filter(): void
+    {
+        $student = User::factory()->student()->inProgress()->create();
+        $coach = User::factory()->coach()->create();
+        $upcoming = Meeting::factory()->reserved()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->addDays(3)->startOfHour(),
+        ]);
+        $past = Meeting::factory()->completed()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->subDays(3)->startOfHour(),
+        ]);
+
+        $response = $this->actingAs($coach)->get(route('coach.meetings.index').'?tab=past');
+
+        $response->assertOk();
+        $response->assertViewHas('meetings', fn ($meetings) => $meetings->contains('id', $past->id) && ! $meetings->contains('id', $upcoming->id));
+    }
+
+    public function test_coach_index_all_tab_filter(): void
+    {
+        $student = User::factory()->student()->inProgress()->create();
+        $coach = User::factory()->coach()->create();
+        $upcoming = Meeting::factory()->reserved()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->addDays(3)->startOfHour(),
+        ]);
+        $past = Meeting::factory()->completed()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->subDays(3)->startOfHour(),
+        ]);
+
+        $response = $this->actingAs($coach)->get(route('coach.meetings.index').'?tab=all');
+
+        $response->assertOk();
+        $response->assertViewHas('meetings', fn ($meetings) => $meetings->contains('id', $past->id) && $meetings->contains('id', $upcoming->id));
+    }
+
+    public function test_coach_index_precedence_tab_filter(): void
+    {
+        $student = User::factory()->student()->inProgress()->create();
+        $coach = User::factory()->coach()->create();
+        $upcoming = Meeting::factory()->reserved()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->addDays(3)->startOfHour(),
+        ]);
+        $past = Meeting::factory()->completed()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->subDays(3)->startOfHour(),
+        ]);
+
+        $response = $this->actingAs($coach)->get(route('coach.meetings.index').'?tab=past&filter=upcoming');
+
+        $response->assertOk();
+        $response->assertViewHas('meetings', fn ($meetings) => $meetings->contains('id', $past->id) && ! $meetings->contains('id', $upcoming->id));
+    }
+
+    public function test_coach_index_supports_legacy_filter(): void
+    {
+        $student = User::factory()->student()->inProgress()->create();
+        $coach = User::factory()->coach()->create();
+        $upcoming = Meeting::factory()->reserved()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->addDays(3)->startOfHour(),
+        ]);
+        $past = Meeting::factory()->completed()->forCoach($coach)->forStudent($student)->create([
+            'scheduled_at' => now()->subDays(3)->startOfHour(),
+        ]);
+
+        $response = $this->actingAs($coach)->get(route('coach.meetings.index').'?filter=past');
+
+        $response->assertOk();
+        $response->assertViewHas('meetings', fn ($meetings) => $meetings->contains('id', $past->id) && ! $meetings->contains('id', $upcoming->id));
     }
 
     public function test_upsert_memo_only_for_assigned_coach(): void
@@ -255,11 +450,10 @@ class MeetingControllerTest extends TestCase
         $response->assertForbidden();
     }
 
-    public function test_store_blocks_double_booking_for_same_coach_and_slot(): void
+    public function test_store_allows_rebooking_canceled_coach_slot(): void
     {
-        // Arrange: 予約可能コンテキスト + 同コーチ・同時刻に canceled 面談を 1 件先在させる。
-        // canceled は候補抽出(予約済コーチ除外)をすり抜けるが、(coach_id, scheduled_at) UNIQUE は
-        // status を問わず効くため、並行を起こさず決定論的に二重予約の衝突を再現できる。
+        // Arrange: 同じコーチ・同じ日時にキャンセル済み面談が存在する。
+        // キャンセル済みは生成列 active_scheduled_at が NULL になるため、再予約を許可する。
         $student = User::factory()->student()->inProgress()->create(['max_meetings' => 3]);
         $otherStudent = User::factory()->student()->create();
         $admin = User::factory()->admin()->create();
@@ -272,7 +466,7 @@ class MeetingControllerTest extends TestCase
         $enrollment = Enrollment::factory()->for($student, 'user')->for($certification)->learning()->create();
         $scheduledAt = now()->startOfDay()->next(Carbon::MONDAY)->setTime(10, 0); // 次の月曜 10:00(未来)
 
-        Meeting::factory()->canceled()->forCoach($coach)->forStudent($otherStudent)->create([
+        $canceledMeeting = Meeting::factory()->canceled()->forCoach($coach)->forStudent($otherStudent)->create([
             'scheduled_at' => $scheduledAt,
         ]);
 
@@ -284,13 +478,21 @@ class MeetingControllerTest extends TestCase
                 'topic' => '相談したい',
             ]);
 
-        // Assert: 二重予約は成立せず、新規 reserved は作られない(canceled の 1 件のみが残る)
+        // Assert: キャンセル履歴を保持したまま、同じコーチ・同じ日時への再予約が成立する。
         $response->assertRedirect();
-        $response->assertSessionHas('error');
+        $this->assertDatabaseHas('meetings', [
+            'id' => $canceledMeeting->id,
+            'status' => MeetingStatus::Canceled->value,
+        ]);
+        $this->assertDatabaseHas('meetings', [
+            'coach_id' => $coach->id,
+            'student_id' => $student->id,
+            'scheduled_at' => $scheduledAt->format('Y-m-d H:i:s'),
+            'status' => MeetingStatus::Reserved->value,
+        ]);
         $this->assertSame(
-            0,
-            Meeting::query()->where('status', MeetingStatus::Reserved->value)->count(),
-            '同コーチ・同時刻の二重予約は (coach_id, scheduled_at) UNIQUE で阻止されるはず',
+            2,
+            Meeting::query()->where('coach_id', $coach->id)->where('scheduled_at', $scheduledAt)->count(),
         );
     }
 

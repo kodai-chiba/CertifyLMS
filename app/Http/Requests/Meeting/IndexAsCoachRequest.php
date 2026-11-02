@@ -9,7 +9,8 @@ use App\Models\Meeting;
 use Illuminate\Foundation\Http\FormRequest;
 
 /**
- * コーチ視点の面談一覧リクエスト。受講生別 / 受講登録別フィルタ + viewAny 認可を行う。
+ * コーチ視点の面談一覧リクエスト。
+ * filter / tab による表示切替と、受講生別 / 受講登録別フィルタを受け付ける。
  *
  * @see MeetingController::indexAsCoach()
  */
@@ -27,6 +28,7 @@ class IndexAsCoachRequest extends FormRequest
     {
         return [
             'filter' => ['nullable', 'in:upcoming,past,all'],
+            'tab' => ['nullable', 'in:upcoming,past,all'],
             'student' => ['nullable', 'ulid', 'exists:users,id'],
             'enrollment' => ['nullable', 'ulid', 'exists:enrollments,id'],
         ];
