@@ -279,6 +279,26 @@ class User extends Authenticatable
     }
 
     /**
+     * 自身が所有するAIチャットの会話一覧。
+     *
+     * @return HasMany<AiChatConversation, $this>
+     */
+    public function aiChatConversations(): HasMany
+    {
+        return $this->hasMany(AiChatConversation::class);
+    }
+
+    /**
+     * 自身のAIチャットの日別利用履歴。
+     *
+     * @return HasMany<AiChatDailyUsage, $this>
+     */
+    public function aiChatDailyUsages(): HasMany
+    {
+        return $this->hasMany(AiChatDailyUsage::class);
+    }
+
+    /**
      * Laravel フレームワーク側のシグナル(`Illuminate\Foundation\Auth\User::sendPasswordResetNotification($token)`)
      * との LSP 整合のため、引数に型宣言を付与しない(親クラスが parameter type なしで宣言しているため)。
      *
