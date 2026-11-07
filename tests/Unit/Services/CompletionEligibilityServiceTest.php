@@ -21,6 +21,7 @@ class CompletionEligibilityServiceTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+
         $this->service = app(CompletionEligibilityService::class);
     }
 
@@ -35,7 +36,10 @@ class CompletionEligibilityServiceTest extends TestCase
     {
         $certification = Certification::factory()->published()->create();
         $enrollment = Enrollment::factory()->for($certification)->create();
-        MockExam::factory()->for($certification)->create(['is_published' => false]);
+
+        MockExam::factory()->for($certification)->create([
+            'is_published' => false,
+        ]);
 
         $this->assertFalse($this->service->isEligible($enrollment));
     }
@@ -45,11 +49,17 @@ class CompletionEligibilityServiceTest extends TestCase
         $certification = Certification::factory()->published()->create();
         $enrollment = Enrollment::factory()->for($certification)->create();
 
-        $exam1 = MockExam::factory()->for($certification)->create(['is_published' => true]);
-        $exam2 = MockExam::factory()->for($certification)->create(['is_published' => true]);
+        $exam1 = MockExam::factory()->for($certification)->create([
+            'is_published' => true,
+        ]);
 
-        MockExamSession::factory()->for($enrollment)->for($exam1)->create(['pass' => true]);
-        // exam2 は未合格
+        MockExam::factory()->for($certification)->create([
+            'is_published' => true,
+        ]);
+
+        MockExamSession::factory()->for($enrollment)->for($exam1)->create([
+            'pass' => true,
+        ]);
 
         $this->assertFalse($this->service->isEligible($enrollment));
     }
@@ -59,11 +69,21 @@ class CompletionEligibilityServiceTest extends TestCase
         $certification = Certification::factory()->published()->create();
         $enrollment = Enrollment::factory()->for($certification)->create();
 
-        $exam1 = MockExam::factory()->for($certification)->create(['is_published' => true]);
-        $exam2 = MockExam::factory()->for($certification)->create(['is_published' => true]);
+        $exam1 = MockExam::factory()->for($certification)->create([
+            'is_published' => true,
+        ]);
 
-        MockExamSession::factory()->for($enrollment)->for($exam1)->create(['pass' => true]);
-        MockExamSession::factory()->for($enrollment)->for($exam2)->create(['pass' => true]);
+        $exam2 = MockExam::factory()->for($certification)->create([
+            'is_published' => true,
+        ]);
+
+        MockExamSession::factory()->for($enrollment)->for($exam1)->create([
+            'pass' => true,
+        ]);
+
+        MockExamSession::factory()->for($enrollment)->for($exam2)->create([
+            'pass' => true,
+        ]);
 
         $this->assertTrue($this->service->isEligible($enrollment));
     }
@@ -72,12 +92,101 @@ class CompletionEligibilityServiceTest extends TestCase
     {
         $certification = Certification::factory()->published()->create();
         $enrollment = Enrollment::factory()->for($certification)->create();
-        $exam = MockExam::factory()->for($certification)->create(['is_published' => true]);
 
-        // 同じ exam に対し 2 セッションともに合格(DISTINCT mock_exam_id でカウントされ 1 件として扱われる)
-        MockExamSession::factory()->for($enrollment)->for($exam)->create(['pass' => true]);
-        MockExamSession::factory()->for($enrollment)->for($exam)->create(['pass' => true]);
+        $exam = MockExam::factory()->for($certification)->create([
+            'is_published' => true,
+        ]);
+
+        MockExamSession::factory()->for($enrollment)->for($exam)->create([
+            'pass' => true,
+        ]);
+
+        MockExamSession::factory()->for($enrollment)->for($exam)->create([
+            'pass' => true,
+        ]);
 
         $this->assertTrue($this->service->isEligible($enrollment));
+    }
+
+    public function test_unpublished_exam_pass_does_not_count_toward_completion(): void
+    {
+        $certification = Certification::factory()->published()->create();
+        $enrollment = Enrollment::factory()->for($certification)->create();
+
+        $publishedExam1 = MockExam::factory()->for($certification)->create([
+            'is_published' => true,
+        ]);
+
+        MockExam::factory()->for($certification)->create([
+            'is_published' => true,
+        ]);
+
+        $unpublishedExam = MockExam::factory()->for($certification)->create([
+            'is_published' => false,
+        ]);
+
+        MockExamSession::factory()->for($enrollment)->for($publishedExam1)->create([
+            'pass' => true,
+        ]);
+
+        MockExamSession::factory()->for($enrollment)->for($unpublishedExam)->create([
+            'pass' => true,
+        ]);
+
+        $this->assertFalse($this->service->isEligible($enrollment));
+    }
+
+    public function test_another_certifications_exam_pass_does_not_count_toward_completion(): void
+    {
+        $certification = Certification::factory()->published()->create();
+        $anotherCertification = Certification::factory()->published()->create();
+
+        $enrollment = Enrollment::factory()->for($certification)->create();
+
+        $publishedExam1 = MockExam::factory()->for($certification)->create([
+            'is_published' => true,
+        ]);
+
+        MockExam::factory()->for($certification)->create([
+            'is_published' => true,
+        ]);
+
+        $anotherExam = MockExam::factory()->for($anotherCertification)->create([
+            'is_published' => true,
+        ]);
+
+        MockExamSession::factory()->for($enrollment)->for($publishedExam1)->create([
+            'pass' => true,
+        ]);
+
+        MockExamSession::factory()->for($enrollment)->for($anotherExam)->create([
+            'pass' => true,
+        ]);
+
+        $this->assertFalse($this->service->isEligible($enrollment));
+    }
+
+    public function test_duplicate_passing_sessions_do_not_replace_another_unpassed_exam(): void
+    {
+        $certification = Certification::factory()->published()->create();
+        $enrollment = Enrollment::factory()->for($certification)->create();
+
+        $exam1 = MockExam::factory()->for($certification)->create([
+            'is_published' => true,
+        ]);
+
+        MockExam::factory()->for($certification)->create([
+            'is_published' => true,
+        ]);
+
+        MockExamSession::factory()->for($enrollment)->for($exam1)->create([
+            'pass' => true,
+        ]);
+
+        MockExamSession::factory()->for($enrollment)->for($exam1)->create([
+            'pass' => true,
+        ]);
+
+        $this->assertFalse($this->service->isEligible($enrollment));
     }
 }

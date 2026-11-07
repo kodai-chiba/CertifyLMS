@@ -24,12 +24,14 @@ class IssueActionTest extends TestCase
     {
         Mockery::close();
         Carbon::setTestNow();
+
         parent::tearDown();
     }
 
     public function test_issues_certificate_for_passed_enrollment(): void
     {
         Storage::fake('private');
+
         Carbon::setTestNow(Carbon::parse('2026-05-14 10:00:00'));
 
         $enrollment = Enrollment::factory()->passed()->create();
@@ -41,7 +43,12 @@ class IssueActionTest extends TestCase
         $this->assertSame($enrollment->user_id, $certificate->user_id);
         $this->assertSame($enrollment->id, $certificate->enrollment_id);
         $this->assertSame($enrollment->certification_id, $certificate->certification_id);
-        $this->assertDatabaseHas('certificates', ['id' => $certificate->id]);
+
+        $this->assertDatabaseHas('certificates', [
+            'id' => $certificate->id,
+        ]);
+
+        Storage::disk('private')->assertExists($certificate->pdf_path);
     }
 
     public function test_throws_when_enrollment_not_passed(): void
@@ -76,11 +83,26 @@ class IssueActionTest extends TestCase
         $enrollment = Enrollment::factory()->passed()->create();
 
         $action = $this->app->make(IssueAction::class);
-        $action($enrollment);
+        $certificate = $action($enrollment);
 
-        $this->expectException(CertificateAlreadyIssuedException::class);
+        Storage::disk('private')->assertExists($certificate->pdf_path);
 
-        $action($enrollment);
+        try {
+            $action($enrollment);
+
+            $this->fail('CertificateAlreadyIssuedException が throw されるはずです。');
+        } catch (CertificateAlreadyIssuedException) {
+            // 期待通り
+        }
+
+        Storage::disk('private')->assertExists($certificate->pdf_path);
+
+        $this->assertSame(
+            1,
+            Certificate::query()
+                ->where('enrollment_id', $enrollment->id)
+                ->count()
+        );
     }
 
     public function test_only_one_certificate_remains_after_duplicate_call_attempt(): void
@@ -90,14 +112,21 @@ class IssueActionTest extends TestCase
         $enrollment = Enrollment::factory()->passed()->create();
 
         $action = $this->app->make(IssueAction::class);
-        $action($enrollment);
+        $certificate = $action($enrollment);
 
         try {
             $action($enrollment);
-        } catch (CertificateAlreadyIssuedException $e) {
-            // expected
+        } catch (CertificateAlreadyIssuedException) {
+            // 期待通り
         }
 
-        $this->assertSame(1, Certificate::query()->where('enrollment_id', $enrollment->id)->count());
+        $this->assertSame(
+            1,
+            Certificate::query()
+                ->where('enrollment_id', $enrollment->id)
+                ->count()
+        );
+
+        Storage::disk('private')->assertExists($certificate->pdf_path);
     }
 }
