@@ -2,6 +2,8 @@
  * 通知ベルのポップオーバーを制御する。
  * 通知の取得・タブ切り替え・既読処理を行う。
  */
+import { getJson, postJson } from '../utils/fetch-json';
+
 export function initNotificationPopover() {
     const root = document.querySelector('[data-notification-popover-root]');
 
@@ -24,13 +26,11 @@ export function initNotificationPopover() {
         return;
     }
 
-    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
-
     let activeTab = 'all';
     let isOpen = false;
 
     function updateBadge(count) {
-        const value = Number(count) || 0;
+        const value = Math.max(0, Number(count) || 0);
 
         if (badge) {
             badge.textContent = value > 99 ? '99+' : String(value);
@@ -60,8 +60,6 @@ export function initNotificationPopover() {
         loading?.classList.toggle('hidden', !value);
         items.classList.toggle('hidden', value);
 
-        // 読み込み開始時だけ空表示を隠す。
-        // 読み込み完了後の表示は renderNotifications() に任せる。
         if (value) {
             empty?.classList.add('hidden');
         }
@@ -117,7 +115,7 @@ export function initNotificationPopover() {
 
             row.href = '#';
             row.dataset.notificationId = notification.id;
-            row.dataset.notificationUrl = notification.url;
+            row.dataset.notificationUrl = notification.url ?? '';
 
             const isUnread = notification.read_at === null;
 
@@ -144,21 +142,9 @@ export function initNotificationPopover() {
         setLoading(true);
 
         try {
-            const response = await fetch(
-                `/notifications/feed?tab=${encodeURIComponent(activeTab)}`,
-                {
-                    headers: {
-                        Accept: 'application/json',
-                    },
-                    credentials: 'same-origin',
-                },
+            const data = await getJson(
+                `/api/v1/notifications?tab=${encodeURIComponent(activeTab)}`,
             );
-
-            if (!response.ok) {
-                throw new Error('通知の取得に失敗しました。');
-            }
-
-            const data = await response.json();
 
             renderNotifications(data.notifications ?? []);
             updateBadge(data.unread_count ?? 0);
@@ -191,7 +177,7 @@ export function initNotificationPopover() {
         });
     });
 
-    items.addEventListener('click', (event) => {
+    items.addEventListener('click', async (event) => {
         const row = event.target.closest('[data-notification-popover-row]');
 
         if (!row) {
@@ -200,46 +186,53 @@ export function initNotificationPopover() {
 
         event.preventDefault();
 
-        const notificationUrl = row.dataset.notificationUrl;
+        const notificationId = row.dataset.notificationId;
 
-        if (!notificationUrl || !csrfToken) {
+        if (!notificationId || row.dataset.processing === 'true') {
             return;
         }
 
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.action = notificationUrl;
+        row.dataset.processing = 'true';
 
-        const tokenInput = document.createElement('input');
-        tokenInput.type = 'hidden';
-        tokenInput.name = '_token';
-        tokenInput.value = csrfToken;
+        try {
+            const data = await postJson(
+                `/api/v1/notifications/${encodeURIComponent(notificationId)}/read`,
+            );
 
-        form.appendChild(tokenInput);
-        document.body.appendChild(form);
-        form.submit();
+            updateBadge(data.unread_count ?? 0);
+
+            const notificationUrl = row.dataset.notificationUrl;
+
+            if (notificationUrl) {
+                const destination = new URL(notificationUrl, window.location.origin);
+
+                if (destination.origin === window.location.origin) {
+                    window.location.assign(destination.href);
+
+                    return;
+                }
+            }
+
+            await loadNotifications();
+        } catch (error) {
+            console.error(error);
+            alert('通知を既読にできませんでした。');
+        } finally {
+            delete row.dataset.processing;
+        }
     });
 
     markAllButton?.addEventListener('click', async () => {
-        if (!csrfToken) {
+        if (markAllButton.disabled) {
             return;
         }
 
         markAllButton.disabled = true;
 
         try {
-            const response = await fetch('/notifications/read-all', {
-                method: 'POST',
-                headers: {
-                    'X-CSRF-TOKEN': csrfToken,
-                    Accept: 'application/json',
-                },
-                credentials: 'same-origin',
-            });
+            const data = await postJson('/api/v1/notifications/read-all');
 
-            if (!response.ok) {
-                throw new Error('既読処理に失敗しました。');
-            }
+            updateBadge(data.unread_count ?? 0);
 
             await loadNotifications();
         } catch (error) {
