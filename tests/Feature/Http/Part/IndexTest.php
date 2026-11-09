@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace Tests\Feature\Http\Part;
 
 use App\Models\Certification;
+use App\Models\CertificationCoachAssignment;
 use App\Models\Part;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Str;
 use Tests\Support\ContentTestHelpers;
 use Tests\TestCase;
 
@@ -80,5 +82,27 @@ class IndexTest extends TestCase
             $response->viewData('parts')->pluck('order')->all(),
             'Part 一覧は order 昇順で並ぶはず(登録順ではない)',
         );
+    }
+
+    public function test_revoked_coach_cannot_view_parts(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $admin = User::factory()->admin()->create();
+        $cert = Certification::factory()->published()->create();
+
+        CertificationCoachAssignment::create([
+            'id' => (string) Str::ulid(),
+            'certification_id' => $cert->id,
+            'user_id' => $coach->id,
+            'assigned_by_user_id' => $admin->id,
+            'assigned_at' => now()->subDay(),
+            'unassigned_at' => now(),
+        ]);
+
+        Part::factory()->forCertification($cert)->create();
+
+        $this->actingAs($coach)
+            ->get(route('admin.certifications.parts.index', $cert))
+            ->assertForbidden();
     }
 }

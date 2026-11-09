@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace Tests\Feature\Http\Part;
 
 use App\Models\Certification;
+use App\Models\CertificationCoachAssignment;
 use App\Models\Part;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Str;
 use Tests\Support\ContentTestHelpers;
 use Tests\TestCase;
 
@@ -28,6 +30,7 @@ class StoreTest extends TestCase
             ]);
 
         $part = Part::where('title', '第2部 ネットワーク')->firstOrFail();
+
         $response->assertRedirect(route('admin.parts.show', $part));
         $this->assertSame('draft', $part->status->value);
         $this->assertSame(2, $part->order);
@@ -51,7 +54,57 @@ class StoreTest extends TestCase
         $cert = Certification::factory()->published()->create();
 
         $this->actingAs($coach)
-            ->post(route('admin.certifications.parts.store', $cert), ['title' => 'X'])
+            ->post(route('admin.certifications.parts.store', $cert), [
+                'title' => 'X',
+            ])
             ->assertForbidden();
+    }
+
+    public function test_assigned_coach_can_create_part(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $cert = Certification::factory()->published()->create();
+
+        $this->assignCoach($coach, $cert);
+
+        $response = $this->actingAs($coach)
+            ->post(route('admin.certifications.parts.store', $cert), [
+                'title' => '担当コーチが作成したPart',
+                'description' => '担当資格の教材コンテンツ',
+            ]);
+
+        $part = Part::where('title', '担当コーチが作成したPart')->firstOrFail();
+
+        $response->assertRedirect(route('admin.parts.show', $part));
+
+        $this->assertSame($cert->id, $part->certification_id);
+        $this->assertSame('draft', $part->status->value);
+    }
+
+    public function test_revoked_coach_cannot_create_part(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $admin = User::factory()->admin()->create();
+        $cert = Certification::factory()->published()->create();
+
+        CertificationCoachAssignment::create([
+            'id' => (string) Str::ulid(),
+            'certification_id' => $cert->id,
+            'user_id' => $coach->id,
+            'assigned_by_user_id' => $admin->id,
+            'assigned_at' => now()->subDay(),
+            'unassigned_at' => now(),
+        ]);
+
+        $this->actingAs($coach)
+            ->post(route('admin.certifications.parts.store', $cert), [
+                'title' => '作成できないPart',
+            ])
+            ->assertForbidden();
+
+        $this->assertDatabaseMissing('parts', [
+            'certification_id' => $cert->id,
+            'title' => '作成できないPart',
+        ]);
     }
 }
