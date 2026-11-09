@@ -101,4 +101,146 @@ class CrudTest extends TestCase
             ->get(route('admin.certifications.question-categories.index', $cert))
             ->assertForbidden();
     }
+
+    public function test_assigned_coach_can_view_question_categories(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $cert = Certification::factory()->published()->create();
+
+        $this->assignCoach($coach, $cert);
+
+        $this->actingAs($coach)
+            ->get(route('admin.certifications.question-categories.index', $cert))
+            ->assertOk();
+    }
+
+    public function test_assigned_coach_can_create_question_category(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $cert = Certification::factory()->published()->create();
+
+        $this->assignCoach($coach, $cert);
+
+        $this->actingAs($coach)
+            ->post(route('admin.certifications.question-categories.store', $cert), [
+                'name' => '担当コーチ作成分野',
+                'slug' => 'coach-category',
+                'sort_order' => 10,
+            ])
+            ->assertRedirect();
+
+        $this->assertDatabaseHas('question_categories', [
+            'certification_id' => $cert->id,
+            'name' => '担当コーチ作成分野',
+            'slug' => 'coach-category',
+        ]);
+    }
+
+    public function test_assigned_coach_can_update_question_category(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $cert = Certification::factory()->published()->create();
+        $category = QuestionCategory::factory()->forCertification($cert)->create();
+
+        $this->assignCoach($coach, $cert);
+
+        $this->actingAs($coach)
+            ->patch(route('admin.question-categories.update', $category), [
+                'name' => '担当コーチ更新分野',
+                'slug' => 'updated-category',
+                'sort_order' => 20,
+            ])
+            ->assertRedirect();
+
+        $this->assertDatabaseHas('question_categories', [
+            'id' => $category->id,
+            'name' => '担当コーチ更新分野',
+            'slug' => 'updated-category',
+        ]);
+    }
+
+    public function test_assigned_coach_can_destroy_question_category(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $cert = Certification::factory()->published()->create();
+        $category = QuestionCategory::factory()->forCertification($cert)->create();
+
+        $this->assignCoach($coach, $cert);
+
+        $this->actingAs($coach)
+            ->delete(route('admin.question-categories.destroy', $category))
+            ->assertRedirect();
+
+        $this->assertDatabaseMissing('question_categories', [
+            'id' => $category->id,
+        ]);
+    }
+
+    public function test_non_assigned_coach_cannot_manage_question_categories(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $cert = Certification::factory()->published()->create();
+        $category = QuestionCategory::factory()->forCertification($cert)->create();
+
+        $this->actingAs($coach)
+            ->postJson(route('admin.certifications.question-categories.store', $cert), [
+                'name' => '不正作成',
+                'slug' => 'unauthorized-category',
+            ])
+            ->assertForbidden();
+
+        $this->actingAs($coach)
+            ->patchJson(route('admin.question-categories.update', $category), [
+                'name' => '不正更新',
+                'slug' => 'unauthorized-update',
+            ])
+            ->assertForbidden();
+
+        $this->actingAs($coach)
+            ->deleteJson(route('admin.question-categories.destroy', $category))
+            ->assertForbidden();
+
+        $this->assertDatabaseHas('question_categories', [
+            'id' => $category->id,
+        ]);
+    }
+
+    public function test_revoked_coach_cannot_manage_question_categories(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $cert = Certification::factory()->published()->create();
+        $category = QuestionCategory::factory()->forCertification($cert)->create();
+
+        $this->assignCoach($coach, $cert);
+
+        $cert->coaches()->updateExistingPivot($coach->id, [
+            'unassigned_at' => now(),
+        ]);
+
+        $this->actingAs($coach)
+            ->get(route('admin.certifications.question-categories.index', $cert))
+            ->assertForbidden();
+
+        $this->actingAs($coach)
+            ->postJson(route('admin.certifications.question-categories.store', $cert), [
+                'name' => '担当解除後の不正作成',
+                'slug' => 'revoked-category',
+            ])
+            ->assertForbidden();
+
+        $this->actingAs($coach)
+            ->patchJson(route('admin.question-categories.update', $category), [
+                'name' => '担当解除後の不正更新',
+                'slug' => 'revoked-update',
+            ])
+            ->assertForbidden();
+
+        $this->actingAs($coach)
+            ->deleteJson(route('admin.question-categories.destroy', $category))
+            ->assertForbidden();
+
+        $this->assertDatabaseHas('question_categories', [
+            'id' => $category->id,
+        ]);
+    }
 }

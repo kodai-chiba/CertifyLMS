@@ -43,6 +43,7 @@ class QuestionCategoryPolicyTest extends TestCase
         $admin = User::factory()->admin()->create();
         $assignedCert = Certification::factory()->published()->create();
         $otherCert = Certification::factory()->published()->create();
+
         CertificationCoachAssignment::create([
             'id' => (string) Str::ulid(),
             'certification_id' => $assignedCert->id,
@@ -50,6 +51,7 @@ class QuestionCategoryPolicyTest extends TestCase
             'assigned_by_user_id' => $admin->id,
             'assigned_at' => now(),
         ]);
+
         $assignedCategory = QuestionCategory::factory()->for($assignedCert)->create();
         $otherCategory = QuestionCategory::factory()->for($otherCert)->create();
         $policy = new QuestionCategoryPolicy;
@@ -72,5 +74,65 @@ class QuestionCategoryPolicyTest extends TestCase
         $this->assertFalse($policy->create($student, $cert));
         $this->assertFalse($policy->update($student, $category));
         $this->assertFalse($policy->delete($student, $category));
+    }
+
+    public function test_coach_can_perform_all_abilities_for_assigned_certification(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $admin = User::factory()->admin()->create();
+        $certification = Certification::factory()->published()->create();
+
+        CertificationCoachAssignment::create([
+            'id' => (string) Str::ulid(),
+            'certification_id' => $certification->id,
+            'user_id' => $coach->id,
+            'assigned_by_user_id' => $admin->id,
+            'assigned_at' => now(),
+        ]);
+
+        $category = QuestionCategory::factory()->for($certification)->create();
+        $policy = new QuestionCategoryPolicy;
+
+        $this->assertTrue($policy->viewAny($coach, $certification));
+        $this->assertTrue($policy->create($coach, $certification));
+        $this->assertTrue($policy->update($coach, $category));
+        $this->assertTrue($policy->delete($coach, $category));
+    }
+
+    public function test_coach_cannot_perform_any_ability_for_unassigned_certification(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $certification = Certification::factory()->published()->create();
+        $category = QuestionCategory::factory()->for($certification)->create();
+        $policy = new QuestionCategoryPolicy;
+
+        $this->assertFalse($policy->viewAny($coach, $certification));
+        $this->assertFalse($policy->create($coach, $certification));
+        $this->assertFalse($policy->update($coach, $category));
+        $this->assertFalse($policy->delete($coach, $category));
+    }
+
+    public function test_coach_cannot_manage_certification_after_assignment_is_revoked(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $admin = User::factory()->admin()->create();
+        $certification = Certification::factory()->published()->create();
+
+        CertificationCoachAssignment::create([
+            'id' => (string) Str::ulid(),
+            'certification_id' => $certification->id,
+            'user_id' => $coach->id,
+            'assigned_by_user_id' => $admin->id,
+            'assigned_at' => now()->subDay(),
+            'unassigned_at' => now(),
+        ]);
+
+        $category = QuestionCategory::factory()->for($certification)->create();
+        $policy = new QuestionCategoryPolicy;
+
+        $this->assertFalse($policy->viewAny($coach, $certification));
+        $this->assertFalse($policy->create($coach, $certification));
+        $this->assertFalse($policy->update($coach, $category));
+        $this->assertFalse($policy->delete($coach, $category));
     }
 }
