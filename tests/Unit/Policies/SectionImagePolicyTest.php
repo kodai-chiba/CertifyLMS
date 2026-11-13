@@ -41,6 +41,7 @@ class SectionImagePolicyTest extends TestCase
         $admin = User::factory()->admin()->create();
         $assignedCert = Certification::factory()->published()->create();
         $otherCert = Certification::factory()->published()->create();
+
         CertificationCoachAssignment::create([
             'id' => (string) Str::ulid(),
             'certification_id' => $assignedCert->id,
@@ -48,12 +49,15 @@ class SectionImagePolicyTest extends TestCase
             'assigned_by_user_id' => $admin->id,
             'assigned_at' => now(),
         ]);
+
         $assignedSection = Section::factory()->for(
             Chapter::factory()->for(Part::factory()->for($assignedCert)->published())->published()
         )->published()->create();
+
         $otherSection = Section::factory()->for(
             Chapter::factory()->for(Part::factory()->for($otherCert)->published())->published()
         )->published()->create();
+
         $policy = new SectionImagePolicy;
 
         $this->assertTrue($policy->create($coach, $assignedSection));
@@ -69,5 +73,69 @@ class SectionImagePolicyTest extends TestCase
 
         $this->assertFalse($policy->create($student, $section));
         $this->assertFalse($policy->delete($student, $image));
+    }
+
+    public function test_coach_can_create_and_delete_images_for_assigned_certification(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $admin = User::factory()->admin()->create();
+        $certification = Certification::factory()->published()->create();
+
+        CertificationCoachAssignment::create([
+            'id' => (string) Str::ulid(),
+            'certification_id' => $certification->id,
+            'user_id' => $coach->id,
+            'assigned_by_user_id' => $admin->id,
+            'assigned_at' => now(),
+        ]);
+
+        $part = Part::factory()->for($certification)->published()->create();
+        $chapter = Chapter::factory()->for($part)->published()->create();
+        $section = Section::factory()->for($chapter)->published()->create();
+        $image = SectionImage::factory()->for($section)->create();
+        $policy = new SectionImagePolicy;
+
+        $this->assertTrue($policy->create($coach, $section));
+        $this->assertTrue($policy->delete($coach, $image));
+    }
+
+    public function test_coach_cannot_create_or_delete_images_for_unassigned_certification(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $certification = Certification::factory()->published()->create();
+
+        $part = Part::factory()->for($certification)->published()->create();
+        $chapter = Chapter::factory()->for($part)->published()->create();
+        $section = Section::factory()->for($chapter)->published()->create();
+        $image = SectionImage::factory()->for($section)->create();
+        $policy = new SectionImagePolicy;
+
+        $this->assertFalse($policy->create($coach, $section));
+        $this->assertFalse($policy->delete($coach, $image));
+    }
+
+    public function test_coach_cannot_create_or_delete_images_after_assignment_is_revoked(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $admin = User::factory()->admin()->create();
+        $certification = Certification::factory()->published()->create();
+
+        CertificationCoachAssignment::create([
+            'id' => (string) Str::ulid(),
+            'certification_id' => $certification->id,
+            'user_id' => $coach->id,
+            'assigned_by_user_id' => $admin->id,
+            'assigned_at' => now()->subDay(),
+            'unassigned_at' => now(),
+        ]);
+
+        $part = Part::factory()->for($certification)->published()->create();
+        $chapter = Chapter::factory()->for($part)->published()->create();
+        $section = Section::factory()->for($chapter)->published()->create();
+        $image = SectionImage::factory()->for($section)->create();
+        $policy = new SectionImagePolicy;
+
+        $this->assertFalse($policy->create($coach, $section));
+        $this->assertFalse($policy->delete($coach, $image));
     }
 }

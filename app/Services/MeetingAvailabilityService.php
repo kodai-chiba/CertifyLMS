@@ -16,15 +16,17 @@ use Illuminate\Support\Collection;
  * 担当コーチ集合の面談可能時間枠を 60 分単位で展開し、空きスロットを集計する Service。
  *
  * 受講生の予約画面が「該当資格の担当コーチ全員の有効枠 Union」を 1 日単位で取得し、
- * 既存予約済時刻 を除外して各スロットの「予約可能なコーチ数」を返す。受講生にコーチ個別は提示せず、
- * 予約確定時にコーチを自動割当する。
+ * LMS の既存予約および Google Calendar の予定あり時間帯を除外して、
+ * 各スロットの「予約可能なコーチ数」を返す。
  */
 final class MeetingAvailabilityService
 {
+    public function __construct(
+        private readonly GoogleCalendarService $googleCalendarService,
+    ) {}
+
     /**
      * 指定 Certification の担当コーチ集合について、指定日 1 日分の 60 分単位空きスロットを返す。
-     *
-     * 1 リクエストあたり availability 1 クエリ + meetings 1 クエリ で完結させる。
      *
      * @return Collection<int, array{slot_start: Carbon, slot_end: Carbon, available_coach_count: int}>
      */
@@ -34,12 +36,13 @@ final class MeetingAvailabilityService
         $dayEnd = $date->copy()->endOfDay();
         $dayOfWeek = $date->dayOfWeek;
 
-        $coaches = $certification->coaches()->get();
+        $coaches = $certification->coaches()->with('googleCredential')->get();
         if ($coaches->isEmpty()) {
             return collect();
         }
 
         $coachIds = $coaches->pluck('id')->all();
+        $coachesById = $coaches->keyBy('id');
 
         $availabilities = CoachAvailability::query()
             ->whereIn('coach_id', $coachIds)
@@ -53,13 +56,16 @@ final class MeetingAvailabilityService
             ->whereIn('status', [MeetingStatus::Reserved->value, MeetingStatus::Completed->value])
             ->get(['coach_id', 'scheduled_at']);
 
-        // 予約済スロットを (coach_id => Set<H:i>) で索引化
+        // 予約済スロットを (coach_id => Set<H:i>) で索引化する。
         $bookedByCoach = $existingMeetings
             ->groupBy('coach_id')
-            ->map(fn ($rows) => $rows->map(fn (Meeting $m) => $m->scheduled_at->format('H:i'))->all());
+            ->map(fn ($rows) => $rows->map(fn (Meeting $meeting) => $meeting->scheduled_at->format('H:i'))->all());
 
-        /** @var array<string, int> $slotCounts スロット開始時刻(H:i) → available coach 数 */
+        /** @var array<string, int> $slotCounts */
         $slotCounts = [];
+
+        /** @var array<string, bool> $googleBusyCache */
+        $googleBusyCache = [];
 
         foreach ($availabilities as $availability) {
             $slot = Carbon::parse($date->format('Y-m-d').' '.$availability->start_time);
@@ -71,7 +77,23 @@ final class MeetingAvailabilityService
                 $booked = $bookedByCoach[$coachId] ?? [];
 
                 if (! in_array($slotKey, $booked, true)) {
-                    $slotCounts[$slotKey] = ($slotCounts[$slotKey] ?? 0) + 1;
+                    $coach = $coachesById->get($coachId);
+
+                    if ($coach !== null) {
+                        $cacheKey = $coachId.'|'.$slotKey;
+
+                        if (! array_key_exists($cacheKey, $googleBusyCache)) {
+                            $googleBusyCache[$cacheKey] = $this->googleCalendarService->isBusy(
+                                $coach,
+                                $slot->copy(),
+                                $slot->copy()->addHour(),
+                            );
+                        }
+
+                        if (! $googleBusyCache[$cacheKey]) {
+                            $slotCounts[$slotKey] = ($slotCounts[$slotKey] ?? 0) + 1;
+                        }
+                    }
                 }
 
                 $slot->addHour();

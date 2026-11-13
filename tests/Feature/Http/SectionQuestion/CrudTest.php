@@ -38,6 +38,7 @@ class CrudTest extends TestCase
             ->assertRedirect();
 
         $question = SectionQuestion::firstOrFail();
+
         $this->assertSame('draft', $question->status->value);
         $this->assertSame($section->id, $question->section_id);
         $this->assertSame(4, $question->options()->count());
@@ -129,6 +130,7 @@ class CrudTest extends TestCase
             ->assertRedirect();
 
         $question->refresh();
+
         $this->assertSame(3, $question->options()->count());
         $this->assertSame(0, SectionQuestionOption::whereIn('id', $originalOptionIds)->count());
     }
@@ -152,6 +154,7 @@ class CrudTest extends TestCase
         $this->actingAs($admin)
             ->post(route('admin.section-questions.publish', $good))
             ->assertRedirect();
+
         $this->assertSame('published', $good->fresh()->status->value);
     }
 
@@ -183,5 +186,177 @@ class CrudTest extends TestCase
             ->assertRedirect();
 
         $this->assertDatabaseMissing('section_questions', ['id' => $question->id]);
+    }
+
+    public function test_assigned_coach_can_view_section_questions(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $cert = Certification::factory()->published()->create();
+        [, , $section] = $this->makePartChain($cert);
+
+        $this->assignCoach($coach, $cert);
+
+        $this->actingAs($coach)
+            ->get(route('admin.sections.questions.index', $section))
+            ->assertOk();
+    }
+
+    public function test_assigned_coach_can_view_create_page(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $cert = Certification::factory()->published()->create();
+        [, , $section] = $this->makePartChain($cert);
+
+        $this->assignCoach($coach, $cert);
+
+        $this->actingAs($coach)
+            ->get(route('admin.sections.questions.create', $section))
+            ->assertOk();
+    }
+
+    public function test_assigned_coach_can_create_section_question(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $cert = Certification::factory()->published()->create();
+        [, , $section] = $this->makePartChain($cert);
+        $category = $this->makeCategory($cert);
+
+        $this->assignCoach($coach, $cert);
+
+        $this->actingAs($coach)
+            ->post(route('admin.sections.questions.store', $section), [
+                'body' => '担当コーチ作成問題',
+                'category_id' => $category->id,
+                'options' => [
+                    ['body' => '正解', 'is_correct' => true, 'order' => 0],
+                    ['body' => '不正解', 'is_correct' => false, 'order' => 1],
+                ],
+            ])
+            ->assertRedirect();
+
+        $this->assertDatabaseHas('section_questions', [
+            'section_id' => $section->id,
+            'body' => '担当コーチ作成問題',
+        ]);
+    }
+
+    public function test_assigned_coach_can_view_section_question(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $cert = Certification::factory()->published()->create();
+        [, , $section] = $this->makePartChain($cert);
+        $category = $this->makeCategory($cert);
+
+        $this->assignCoach($coach, $cert);
+
+        $question = SectionQuestion::factory()
+            ->forSection($section)
+            ->forCategory($category)
+            ->withOptions(4)
+            ->draft()
+            ->create();
+
+        $this->actingAs($coach)
+            ->get(route('admin.section-questions.show', $question))
+            ->assertOk();
+    }
+
+    public function test_assigned_coach_can_update_section_question(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $cert = Certification::factory()->published()->create();
+        [, , $section] = $this->makePartChain($cert);
+        $category = $this->makeCategory($cert);
+
+        $this->assignCoach($coach, $cert);
+
+        $question = SectionQuestion::factory()
+            ->forSection($section)
+            ->forCategory($category)
+            ->withOptions(4)
+            ->draft()
+            ->create();
+
+        $this->actingAs($coach)
+            ->patch(route('admin.section-questions.update', $question), [
+                'body' => '担当コーチ更新問題',
+                'category_id' => $category->id,
+            ])
+            ->assertRedirect();
+
+        $this->assertDatabaseHas('section_questions', [
+            'id' => $question->id,
+            'body' => '担当コーチ更新問題',
+        ]);
+    }
+
+    public function test_assigned_coach_can_publish_and_unpublish_section_question(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $cert = Certification::factory()->published()->create();
+        [, , $section] = $this->makePartChain($cert);
+        $category = $this->makeCategory($cert);
+
+        $this->assignCoach($coach, $cert);
+
+        $question = SectionQuestion::factory()
+            ->forSection($section)
+            ->forCategory($category)
+            ->withOptions(4)
+            ->draft()
+            ->create();
+
+        $this->actingAs($coach)
+            ->post(route('admin.section-questions.publish', $question))
+            ->assertRedirect();
+
+        $this->assertSame('published', $question->fresh()->status->value);
+
+        $this->actingAs($coach)
+            ->post(route('admin.section-questions.unpublish', $question))
+            ->assertRedirect();
+
+        $this->assertSame('draft', $question->fresh()->status->value);
+    }
+
+    public function test_assigned_coach_can_destroy_draft_section_question(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $cert = Certification::factory()->published()->create();
+        [, , $section] = $this->makePartChain($cert);
+        $category = $this->makeCategory($cert);
+
+        $this->assignCoach($coach, $cert);
+
+        $question = SectionQuestion::factory()
+            ->forSection($section)
+            ->forCategory($category)
+            ->draft()
+            ->create();
+
+        $this->actingAs($coach)
+            ->delete(route('admin.section-questions.destroy', $question))
+            ->assertRedirect();
+
+        $this->assertDatabaseMissing('section_questions', [
+            'id' => $question->id,
+        ]);
+    }
+
+    public function test_revoked_coach_cannot_view_section_questions(): void
+    {
+        $coach = User::factory()->coach()->create();
+        $cert = Certification::factory()->published()->create();
+        [, , $section] = $this->makePartChain($cert);
+
+        $this->assignCoach($coach, $cert);
+
+        $cert->coaches()->updateExistingPivot($coach->id, [
+            'unassigned_at' => now(),
+        ]);
+
+        $this->actingAs($coach)
+            ->get(route('admin.sections.questions.index', $section))
+            ->assertForbidden();
     }
 }
