@@ -7,8 +7,10 @@ namespace Tests\Feature\Http;
 use App\Models\Certificate;
 use App\Models\Certification;
 use App\Models\User;
+use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
+use RuntimeException;
 use Tests\TestCase;
 
 class CertificateDownloadTest extends TestCase
@@ -135,5 +137,36 @@ class CertificateDownloadTest extends TestCase
             ->get(route('certificates.download', $certificate));
 
         $response->assertNotFound();
+    }
+
+    public function test_download_failure_returns_server_error(): void
+    {
+        $student = User::factory()->student()->create();
+
+        $certificate = Certificate::factory()
+            ->for($student)
+            ->create();
+
+        $disk = \Mockery::mock(FilesystemAdapter::class);
+
+        $disk->shouldReceive('exists')
+            ->once()
+            ->with($certificate->pdf_path)
+            ->andReturnTrue();
+
+        $disk->shouldReceive('get')
+            ->once()
+            ->with($certificate->pdf_path)
+            ->andThrow(new RuntimeException('PDF読み込み失敗'));
+
+        Storage::shouldReceive('disk')
+            ->once()
+            ->with('private')
+            ->andReturn($disk);
+
+        $response = $this->actingAs($student)
+            ->get(route('certificates.download', $certificate));
+
+        $response->assertInternalServerError();
     }
 }
