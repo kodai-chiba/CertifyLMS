@@ -251,6 +251,49 @@ class StripeWebhookTest extends TestCase
         );
     }
 
+    /**
+     * 期限切れ後に成功Webhookが届いても面談回数を付与しない。
+     */
+    public function test_success_after_expired_checkout_does_not_grant_quota(): void
+    {
+        $payment = Payment::factory()->create([
+            'quantity' => 3,
+        ]);
+
+        $session = $this->checkoutSession($payment, 'unpaid');
+
+        // Checkout Sessionの期限切れを処理する。
+        $this->sendWebhook(
+            $session,
+            'checkout.session.expired'
+        )->assertOk();
+
+        $this->assertSame(
+            PaymentStatus::Canceled,
+            $payment->fresh()->status
+        );
+
+        // 期限切れ後に成功Webhookが届いた場合を検証する。
+        $session['payment_status'] = 'paid';
+
+        $this->sendWebhook(
+            $session,
+            'checkout.session.completed'
+        )->assertOk();
+
+        // CanceledからPaidへ変更されないことを確認する。
+        $this->assertSame(
+            PaymentStatus::Canceled,
+            $payment->fresh()->status
+        );
+
+        // 面談回数が付与されないことを確認する。
+        $this->assertSame(
+            0,
+            $this->purchasedTransactionCount($payment)
+        );
+    }
+
     public function test_failure_event_does_not_override_paid_payment(): void
     {
         $payment = Payment::factory()->create([

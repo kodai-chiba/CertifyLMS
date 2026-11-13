@@ -101,8 +101,11 @@ class StripeWebhookController extends Controller
                 return null;
             }
 
-            // 決済完了後は、後続イベントで状態を変更しない。
-            if ($payment->status === PaymentStatus::Paid) {
+            // 決済完了・期限切れ後は状態を変更しない。
+            if (in_array($payment->status, [
+                PaymentStatus::Paid,
+                PaymentStatus::Canceled,
+            ], true)) {
                 return $payment;
             }
 
@@ -111,10 +114,7 @@ class StripeWebhookController extends Controller
                 if (
                     (int) ($session->amount_total ?? -1) !== $payment->amount
                     || ($session->currency ?? null) !== 'jpy'
-                    || (
-                        isset($session->mode)
-                        && $session->mode !== 'payment'
-                    )
+                    || ($session->mode ?? null) !== 'payment'
                     || ! is_string($session->client_reference_id ?? null)
                     || strtoupper($session->client_reference_id) !== strtoupper($payment->id)
                 ) {
