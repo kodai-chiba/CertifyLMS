@@ -14,8 +14,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  *
  * 受講生ごとに1日1レコードを保持する。
  * 会話履歴を削除しても質問回数は減らさない。
+ * Gemini APIエラーとなった質問は利用回数に含めない。
  *
- * 1日10質問の上限判定と排他制御はUseCase側で実装する。
+ * 1日50通の上限判定と排他制御はUseCase側で実装する。
  */
 class AiChatDailyUsage extends Model
 {

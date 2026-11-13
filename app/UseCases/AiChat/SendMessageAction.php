@@ -35,24 +35,26 @@ class SendMessageAction
         AiChatConversation $conversation,
         string $content
     ): array {
-        // 質問回数を消費する。
-        ($this->consumeDailyQuota)($user);
+        $usage = ($this->consumeDailyQuota)($user);
 
-        // ユーザーの質問を保存する。
-        $userMessage = $conversation->messages()->create([
-            'role' => AiChatMessageRole::User,
-            'content' => $content,
-            'status' => AiChatMessageStatus::Completed,
-        ]);
-
-        // AI回答用のレコードを作成する。
-        $assistantMessage = $conversation->messages()->create([
-            'role' => AiChatMessageRole::Assistant,
-            'content' => null,
-            'status' => AiChatMessageStatus::Pending,
-        ]);
+        $assistantMessage = null;
+        $geminiSucceeded = false;
 
         try {
+            // ユーザーの質問を保存する。
+            $userMessage = $conversation->messages()->create([
+                'role' => AiChatMessageRole::User,
+                'content' => $content,
+                'status' => AiChatMessageStatus::Completed,
+            ]);
+
+            // AI回答用のレコードを作成する。
+            $assistantMessage = $conversation->messages()->create([
+                'role' => AiChatMessageRole::Assistant,
+                'content' => null,
+                'status' => AiChatMessageStatus::Pending,
+            ]);
+
             // 完了済みメッセージだけを会話履歴として取得する。
             $messages = $conversation->messages()
                 ->where('status', AiChatMessageStatus::Completed->value)
@@ -67,6 +69,7 @@ class SendMessageAction
 
             // Gemini APIへの通信中はDBトランザクションを保持しない。
             $response = $this->geminiChatService->generate($messages);
+            $geminiSucceeded = true;
 
             // AI回答を保存する。
             $assistantMessage->update([
@@ -79,8 +82,7 @@ class SendMessageAction
                 'error_detail' => null,
             ]);
         } catch (Throwable $exception) {
-            // 利用者には詳細を公開せず、調査に必要な情報だけをログへ記録する。
-            Log::warning('AI chat generation failed', [
+            Log::warning('AI chat message processing failed', [
                 'conversation_id' => $conversation->id,
                 'exception_type' => get_class($exception),
                 'exception_message' => $exception->getMessage(),
@@ -88,11 +90,37 @@ class SendMessageAction
                 'exception_line' => $exception->getLine(),
             ]);
 
-            $assistantMessage->update([
-                'status' => AiChatMessageStatus::Error,
-                'content' => null,
-                'error_detail' => 'AIサービスから回答を取得できませんでした。',
-            ]);
+            // Gemini APIから回答を取得できなかった場合、
+            // または質問の保存処理が失敗した場合は質問回数を返却する。
+            if (! $geminiSucceeded) {
+                try {
+                    $this->consumeDailyQuota->refund($usage);
+                } catch (Throwable $refundException) {
+                    Log::error('AI chat daily quota refund failed', [
+                        'conversation_id' => $conversation->id,
+                        'exception_type' => get_class($refundException),
+                        'exception_message' => $refundException->getMessage(),
+                    ]);
+                }
+            }
+
+            // AI回答用レコードが作成されている場合のみ、
+            // エラー状態への更新を試みる。
+            if ($assistantMessage !== null) {
+                try {
+                    $assistantMessage->update([
+                        'status' => AiChatMessageStatus::Error,
+                        'content' => null,
+                        'error_detail' => 'AIサービスから回答を取得できませんでした。',
+                    ]);
+                } catch (Throwable $updateException) {
+                    Log::error('AI chat error status update failed', [
+                        'conversation_id' => $conversation->id,
+                        'exception_type' => get_class($updateException),
+                        'exception_message' => $updateException->getMessage(),
+                    ]);
+                }
+            }
 
             throw new RuntimeException(
                 'AIサービスから回答を取得できませんでした。時間をおいて再度お試しください。',

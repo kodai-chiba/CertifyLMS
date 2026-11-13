@@ -8,6 +8,7 @@ use App\Enums\AiChatMessageRole;
 use App\Enums\AiChatMessageStatus;
 use App\Models\AiChatConversation;
 use App\Models\User;
+use App\UseCases\AiChat\IndexAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -21,6 +22,7 @@ class AiChatConversationTest extends TestCase
         parent::setUp();
 
         config()->set('ai-chat.enabled', true);
+        config()->set('ai-chat.conversation_limit', 30);
     }
 
     public function test_student_can_create_conversation(): void
@@ -257,6 +259,86 @@ class AiChatConversationTest extends TestCase
         $this->assertFailedFirstMessageSaved($conversation, $question);
 
         Http::assertSentCount(1);
+    }
+
+    public function test_conversation_list_returns_all_when_under_limit(): void
+    {
+        $student = User::factory()->student()->inProgress()->create();
+
+        for ($i = 1; $i <= 10; $i++) {
+            AiChatConversation::query()->create([
+                'user_id' => $student->id,
+                'title' => "会話{$i}",
+            ]);
+        }
+
+        $conversations = app(IndexAction::class)($student);
+
+        $this->assertCount(10, $conversations);
+    }
+
+    public function test_conversation_list_returns_latest_thirty(): void
+    {
+        $student = User::factory()->student()->inProgress()->create();
+
+        $ids = [];
+
+        for ($i = 1; $i <= 31; $i++) {
+            $conversation = AiChatConversation::query()->create([
+                'user_id' => $student->id,
+                'title' => "会話{$i}",
+                'last_message_at' => now()->addMinutes($i),
+            ]);
+
+            $ids[] = $conversation->id;
+        }
+
+        $conversations = app(IndexAction::class)($student);
+
+        $this->assertCount(30, $conversations);
+        $this->assertFalse($conversations->contains('id', $ids[0]));
+        $this->assertTrue($conversations->contains('id', $ids[30]));
+    }
+
+    public function test_conversation_limit_does_not_delete_old_conversations(): void
+    {
+        $student = User::factory()->student()->inProgress()->create();
+
+        for ($i = 1; $i <= 31; $i++) {
+            AiChatConversation::query()->create([
+                'user_id' => $student->id,
+                'title' => "会話{$i}",
+            ]);
+        }
+
+        $conversations = app(IndexAction::class)($student);
+
+        $this->assertCount(30, $conversations);
+
+        $this->assertSame(
+            31,
+            AiChatConversation::query()
+                ->where('user_id', $student->id)
+                ->count()
+        );
+    }
+
+    public function test_conversation_limit_can_be_changed_by_configuration(): void
+    {
+        config()->set('ai-chat.conversation_limit', 5);
+
+        $student = User::factory()->student()->inProgress()->create();
+
+        for ($i = 1; $i <= 10; $i++) {
+            AiChatConversation::query()->create([
+                'user_id' => $student->id,
+                'title' => "会話{$i}",
+            ]);
+        }
+
+        $conversations = app(IndexAction::class)($student);
+
+        $this->assertCount(5, $conversations);
     }
 
     private function fakeGeminiUnavailable(): void

@@ -173,7 +173,8 @@ class AiChatMessageTest extends TestCase
             ->where('user_id', $student->id)
             ->firstOrFail();
 
-        $this->assertSame(1, $usage->question_count);
+        // Gemini APIエラー時は質問回数に含めない。
+        $this->assertSame(0, $usage->question_count);
 
         Http::assertSentCount(1);
     }

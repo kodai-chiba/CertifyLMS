@@ -20,7 +20,7 @@ class ConsumeDailyQuotaAction
     public function __invoke(User $user): AiChatDailyUsage
     {
         $today = now('Asia/Tokyo')->toDateString();
-        $limit = max(0, (int) config('ai-chat.daily_limit', 10));
+        $limit = max(0, (int) config('ai-chat.daily_limit', 50));
 
         return DB::transaction(function () use ($user, $today, $limit): AiChatDailyUsage {
             // 初回利用時の同時INSERTによる重複を防ぐ。
@@ -50,6 +50,26 @@ class ConsumeDailyQuotaAction
             $usage->increment('question_count');
 
             return $usage->refresh();
+        }, 3);
+    }
+
+    /**
+     * Gemini APIエラー時に消費した質問回数を返却する。
+     *
+     * 質問時に取得した利用履歴を指定することで、
+     * 日付をまたいだ場合も正しい日の利用回数を減算する。
+     */
+    public function refund(AiChatDailyUsage $usage): void
+    {
+        DB::transaction(function () use ($usage): void {
+            $lockedUsage = AiChatDailyUsage::query()
+                ->whereKey($usage->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ($lockedUsage->question_count > 0) {
+                $lockedUsage->decrement('question_count');
+            }
         }, 3);
     }
 }
