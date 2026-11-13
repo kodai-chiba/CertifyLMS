@@ -8,7 +8,7 @@
 
 | ロール | 機能 |
 |---|---|
-| 受講生（student） | 教材閲覧 / 演習問題・苦手分野ドリル / 模擬試験（分野別ヒートマップ・合格可能性スコア）/ 面談予約 / チャット / 学習時間・進捗・ストリーク管理 / 修了証の受領 |
+| 受講生（student） | 教材閲覧 / 演習問題・苦手分野ドリル / 模擬試験（分野別ヒートマップ・合格可能性スコア）/ 面談予約 / 追加面談購入（Stripe Checkout）/ チャット / 学習時間・進捗・ストリーク管理 / 修了証の受領 |
 | コーチ（coach） | 教材・演習問題・模試の管理 / 担当受講生の進捗フォロー / 面談対応・面談メモ / チャット |
 | 管理者（admin） | ユーザー招待・管理 / 資格・資格分類マスタ管理 / 資格へのコーチ割当 / 面談回数の付与 / 全体ダッシュボード |
 
@@ -82,15 +82,15 @@ Blade / CSS / JS を編集しながら開発する場合は、`build` の代わ�
 
 ### 8. 動作確認
 
-http://localhost:8000 にアクセスし、下記の[ログインアカウント](#ログインアカウント)でログインできればセットアップ完了です。
+[http://localhost:8000](http://localhost:8000) にアクセスし、下記の[ログインアカウント](#ログインアカウント)でログインできればセットアップ完了です。
 
 ## 開発環境 URL
 
 | 用途 | URL |
 |---|---|
-| アプリケーション | http://localhost:8000 |
-| phpMyAdmin（DB 確認） | http://localhost:8080 |
-| Mailpit（メール確認） | http://localhost:8025 |
+| アプリケーション | [http://localhost:8000](http://localhost:8000) |
+| phpMyAdmin（DB 確認） | [http://localhost:8080](http://localhost:8080) |
+| Mailpit（メール確認） | [http://localhost:8025](http://localhost:8025) |
 
 アプリケーションが送信するメール（招待メールなど）はすべて Mailpit に届きます。実際のメールは送信されません。
 
@@ -108,6 +108,73 @@ http://localhost:8000 にアクセスし、下記の[ログインアカウント
 このほか、ライフサイクル（招待中 / 受講中 / 卒業 / 退会）を網羅したデモユーザーが投入されます。
 
 > 本サービスは**招待制**です。公開の会員登録画面はありません。新規ユーザーを作るには、管理者でログイン → ユーザー管理から招待 → Mailpit で招待メールの URL を開く → オンボーディング登録、という流れになります。
+
+## 追加面談購入（Stripe Checkout）・Webhook のローカル動作確認
+
+追加面談購入には Stripe のテスト環境を使用します。Stripe のAPIシークレットキーと Webhook 署名シークレットが未設定の場合、実際の Checkout 決済は利用できません。既存の学習機能や自動テストの実行には Stripe の実キーは不要です。
+
+### 1. Stripe テストキーを設定する
+
+Stripe のテスト環境で APIシークレットキー（`sk_test_` で始まる値）を取得し、ローカルの `.env` に設定します。
+
+```dotenv
+STRIPE_SECRET=sk_test_ここにテスト用APIシークレットキー
+```
+
+APIシークレットキーは `.env` のみに設定し、Git にコミットしないでください。`.env.example` には空欄の設定項目を残します。
+
+### 2. アプリケーションを起動する
+
+```bash
+sail up -d
+```
+
+### 3. Stripe CLI で Webhook を転送する
+
+ローカル PC に Stripe CLI をインストールし、別のターミナルで Stripe アカウントにログインします。
+
+```bash
+stripe login
+stripe listen --forward-to http://localhost:8000/webhooks/stripe
+```
+
+`stripe listen` の出力に表示される `whsec_` で始まる署名シークレットを、ローカルの `.env` に設定します。
+
+```dotenv
+STRIPE_WEBHOOK_SECRET=whsec_ここにStripe CLIが表示した値
+```
+
+環境変数の変更後は Laravel の設定キャッシュをクリアします。
+
+```bash
+sail artisan config:clear
+```
+
+`stripe listen` は Webhook を受信する間、起動したままにしてください。
+
+### 4. テスト購入を実行する
+
+1. `student@certify-lms.test` でログインします（受講中の受講生）。
+2. `/meeting-quota/checkout` を開き、公開中の面談パックを選択します。公開中のパックがない場合は、管理者画面で面談パックを公開してください。
+3. Stripe Checkout のテスト決済画面で、Stripe が案内するテストカード（例：`4242 4242 4242 4242`、将来の有効期限、任意の CVC）を使用して支払います。実際のカード番号は入力しないでください。
+4. 決済完了後、`/meeting-quota/success` に戻ることを確認します。
+5. `stripe listen` のターミナルで `checkout.session.completed` が転送され、Webhook が成功応答を返していることを確認します。
+6. 面談回数の残数と履歴を確認し、購入した面談回数が一度だけ加算されていることを確認します。反映はブラウザの完了画面表示ではなく、署名検証済みの Webhook 受信を契機に行われます。
+
+### 5. 失敗・重複・署名不正を確認する
+
+- Stripe Checkout から購入画面へ戻り、キャンセルした場合に面談回数が加算されないことを確認します。
+- 同じ決済完了イベントが再送されても、面談回数が重複加算されないことを確認します。
+- 署名が無効な Webhook は HTTP 400 で拒否されることを確認します。
+
+署名検証・重複受信・失敗イベントなどの自動テストは、以下で実行できます。
+
+```bash
+sail artisan test --filter=MeetingQuotaCheckoutTest
+sail artisan test --filter=StripeWebhookTest
+```
+
+**注意:** `stripe trigger checkout.session.completed` はテスト用の擬似イベントを生成しますが、このアプリケーションで作成した `payments` レコードと対応しないことがあります。面談回数の加算確認には、手順4のアプリケーションからの実際のテスト購入を使用してください。
 
 ## テスト
 
@@ -134,12 +201,15 @@ sail bin pint --test     # 整形漏れの確認（CI 相当のチェック）
 - PHPUnit / Laravel Pint
 - league/commonmark（教材本文の Markdown レンダリング）
 - Pusher（チャットのリアルタイム配信）
+- Stripe（追加面談購入の Checkout / Webhook）
 - Docker（Laravel Sail）
 
 ## 環境変数
 
-`.env.example` をコピーするだけで、すべての機能がローカルで動作します（メールは Mailpit に配信されます）。
+`.env.example` をコピーすると、外部サービス連携を除く基本機能をローカルで利用できます（メールは Mailpit に配信されます）。
 
-- `PUSHER_*` — チャットのリアルタイム配信に使用します。有効にする場合は Pusher のキーを取得して設定し、`BROADCAST_DRIVER=pusher` に変更してください。未設定（既定の `BROADCAST_DRIVER=log`）でもメッセージの送受信自体は動作し、相手画面へのリアルタイム反映のみ行われません
+- `PUSHER_*` — チャットのリアルタイム配信に使用します。有効にする場合は Pusher のキーを取得して設定し、`BROADCAST_DRIVER=pusher` に変更してください。未設定（既定の `BROADCAST_DRIVER=log`）でもメッセージの送受信自体は動作し、相手画面へのリアルタイム反映のみ行われません。
+- `STRIPE_SECRET` — Stripe Checkout のセッション作成に使用するAPIシークレットキーです。ローカル動作確認では Stripe のテスト用APIシークレットキーを設定してください。
+- `STRIPE_WEBHOOK_SECRET` — `/webhooks/stripe` で受信する Stripe イベントの署名検証に使用します。ローカルでは `stripe listen` が表示する署名シークレットを設定してください。
 
 新しい環境変数やセットアップ手順を追加した場合は、`.env.example` と本 README に追記し、チームの誰でも環境を再現できる状態を保ってください。

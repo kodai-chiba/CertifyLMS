@@ -13,11 +13,6 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
-/**
- * EnrollmentPolicy の判定を検証する Unit テスト。
- * view: admin 全可 / student 本人 / coach 担当資格のみ。
- * 状態に依存する ability (updateExamDate, fail, resume, receiveCertificate, delete) を網羅する。
- */
 class EnrollmentPolicyTest extends TestCase
 {
     use RefreshDatabase;
@@ -42,6 +37,7 @@ class EnrollmentPolicyTest extends TestCase
         $admin = User::factory()->admin()->create();
         $assignedCert = Certification::factory()->published()->create();
         $otherCert = Certification::factory()->published()->create();
+
         CertificationCoachAssignment::create([
             'id' => (string) Str::ulid(),
             'certification_id' => $assignedCert->id,
@@ -49,6 +45,7 @@ class EnrollmentPolicyTest extends TestCase
             'assigned_by_user_id' => $admin->id,
             'assigned_at' => now(),
         ]);
+
         $assignedEnrollment = Enrollment::factory()->for($assignedCert)->learning()->create();
         $otherEnrollment = Enrollment::factory()->for($otherCert)->learning()->create();
         $policy = new EnrollmentPolicy;
@@ -110,12 +107,37 @@ class EnrollmentPolicyTest extends TestCase
     {
         $student = User::factory()->student()->create();
         $other = User::factory()->student()->create();
+        $admin = User::factory()->admin()->create();
+        $coach = User::factory()->coach()->create();
+
         $learning = Enrollment::factory()->for($student)->learning()->create();
         $passed = Enrollment::factory()->for($student)->passed()->create();
+
         $policy = new EnrollmentPolicy;
 
-        $this->assertTrue($policy->receiveCertificate($student, $learning));
-        $this->assertFalse($policy->receiveCertificate($student, $passed), 'passed enrollment への再発行は不可');
-        $this->assertFalse($policy->receiveCertificate($other, $learning), '他人の enrollment では受け取り不可');
+        $this->assertTrue(
+            $policy->receiveCertificate($student, $learning),
+            '本人のlearningは受領可能'
+        );
+
+        $this->assertFalse(
+            $policy->receiveCertificate($student, $passed),
+            'passed enrollmentへの再発行は不可'
+        );
+
+        $this->assertFalse(
+            $policy->receiveCertificate($other, $learning),
+            '他人のenrollmentでは受け取り不可'
+        );
+
+        $this->assertFalse(
+            $policy->receiveCertificate($admin, $learning),
+            'adminによる受領は不可'
+        );
+
+        $this->assertFalse(
+            $policy->receiveCertificate($coach, $learning),
+            'coachによる受領は不可'
+        );
     }
 }
