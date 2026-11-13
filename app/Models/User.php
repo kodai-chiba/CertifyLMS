@@ -14,6 +14,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -259,6 +260,16 @@ class User extends Authenticatable
     }
 
     /**
+     * コーチが連携したGoogle CalendarのOAuth認証情報。
+     *
+     * @return HasOne<GoogleCalendarCredential, $this>
+     */
+    public function googleCredential(): HasOne
+    {
+        return $this->hasOne(GoogleCalendarCredential::class, 'user_id');
+    }
+
+    /**
      * 参加している ChatRoom の中間テーブルレコード一覧。
      *
      * @return HasMany<ChatMember, $this>
@@ -276,6 +287,26 @@ class User extends Authenticatable
     public function sentChatMessages(): HasMany
     {
         return $this->hasMany(ChatMessage::class, 'sender_user_id');
+    }
+
+    /**
+     * 自身が所有するAIチャットの会話一覧。
+     *
+     * @return HasMany<AiChatConversation, $this>
+     */
+    public function aiChatConversations(): HasMany
+    {
+        return $this->hasMany(AiChatConversation::class);
+    }
+
+    /**
+     * 自身のAIチャットの日別利用履歴。
+     *
+     * @return HasMany<AiChatDailyUsage, $this>
+     */
+    public function aiChatDailyUsages(): HasMany
+    {
+        return $this->hasMany(AiChatDailyUsage::class);
     }
 
     /**

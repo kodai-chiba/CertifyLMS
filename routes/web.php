@@ -2,9 +2,11 @@
 
 declare(strict_types=1);
 
+use App\Http\Controllers\AiChatConversationController;
 use App\Http\Controllers\AnnouncementController;
 use App\Http\Controllers\Auth\OnboardingController;
 use App\Http\Controllers\BrowseController;
+use App\Http\Controllers\CertificateDownloadController;
 use App\Http\Controllers\CertificationCatalogController;
 use App\Http\Controllers\CertificationCategoryController;
 use App\Http\Controllers\CertificationCoachAssignmentController;
@@ -22,6 +24,7 @@ use App\Http\Controllers\LearningHourTargetController;
 use App\Http\Controllers\MeetingController;
 use App\Http\Controllers\MeetingPackController;
 use App\Http\Controllers\MeetingQuotaHistoryController;
+use App\Http\Controllers\MeetingQuotaPurchaseController;
 use App\Http\Controllers\MockExamAnswerController;
 use App\Http\Controllers\MockExamCatalogController;
 use App\Http\Controllers\MockExamController;
@@ -47,9 +50,11 @@ use App\Http\Controllers\SectionQuizController;
 use App\Http\Controllers\SectionQuizResultController;
 use App\Http\Controllers\Settings\AvailabilityController as SettingsAvailabilityController;
 use App\Http\Controllers\Settings\AvatarController;
+use App\Http\Controllers\Settings\GoogleCalendarController;
 use App\Http\Controllers\Settings\PasswordController;
 use App\Http\Controllers\Settings\ProfileController;
 use App\Http\Controllers\Settings\SettingsDefaultEnrollmentController;
+use App\Http\Controllers\StripeWebhookController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\WeakDrillController;
 use App\Http\Controllers\WeakDrillResultController;
@@ -70,6 +75,12 @@ Route::get('/onboarding/{invitation}', [OnboardingController::class, 'show'])
 Route::post('/onboarding/{invitation}', [OnboardingController::class, 'store'])
     ->middleware('signed')
     ->name('onboarding.store');
+
+// ============================================================
+// Stripe Webhook(Stripe からの決済通知、認証不要)
+// ============================================================
+Route::post('/webhooks/stripe', [StripeWebhookController::class, 'handle'])
+    ->name('webhooks.stripe');
 
 // ============================================================
 // 認証後の全ロール共通ルート
@@ -97,6 +108,10 @@ Route::middleware('auth')->group(function () {
     Route::get('enrollments/{enrollment}', [EnrollmentController::class, 'show'])
         ->withTrashed()
         ->name('enrollments.show');
+
+    // 修了証PDFダウンロード（全ロール共通、認可はCertificatePolicyで制御）
+    Route::get('certificates/{certificate}/download', CertificateDownloadController::class)
+        ->name('certificates.download');
 
     // 受講生メモ管理（admin / 担当 coach のみ。詳細な認可は EnrollmentNotePolicy で制御）
     Route::post('enrollments/{enrollment}/notes', [EnrollmentNoteController::class, 'store'])
@@ -595,12 +610,60 @@ Route::middleware(['auth', 'role:coach'])
     });
 
 // ============================================================
+// コーチ専用ルート — Google Calendar OAuth 連携
+// ============================================================
+Route::middleware(['auth', 'role:coach'])
+    ->prefix('settings/google-calendar')
+    ->name('settings.google-calendar.')
+    ->group(function () {
+        Route::get('redirect', [GoogleCalendarController::class, 'redirect'])->name('redirect');
+        Route::get('callback', [GoogleCalendarController::class, 'callback'])->name('callback');
+        Route::delete('/', [GoogleCalendarController::class, 'destroy'])->name('destroy');
+    });
+
+// ============================================================
 // 受講生専用ルート(受講中=in_progress のみ通過)
 // ============================================================
-Route::middleware(['auth', 'role:student', 'active-learning'])->prefix('meeting-quota')->name('meeting-quota.')->group(function () {
-    // 面談回数履歴
-    Route::get('history', [MeetingQuotaHistoryController::class, 'index'])->name('history');
-});
+Route::middleware(['auth', 'role:student', 'active-learning'])
+    ->prefix('meeting-quota')
+    ->name('meeting-quota.')
+    ->group(function () {
+        // 面談回数履歴
+        Route::get('history', [MeetingQuotaHistoryController::class, 'index'])
+            ->name('history');
+
+        // 追加面談購入（Issue指定のURL・既存画面のルート名）
+        Route::get('checkout', [MeetingQuotaPurchaseController::class, 'index'])
+            ->name('checkout.select');
+
+        // 既存テスト・参照元との後方互換
+        Route::get('purchase', [MeetingQuotaPurchaseController::class, 'index'])
+            ->name('purchase.index');
+
+        // Stripe Checkout Session作成
+        Route::post('checkout', [MeetingQuotaPurchaseController::class, 'checkout'])
+            ->name('checkout.create');
+
+        // 決済完了画面
+        Route::get('success', [MeetingQuotaPurchaseController::class, 'success'])
+            ->name('success');
+    });
+
+// ============================================================
+// 受講生専用ルート — AI 相談
+// ============================================================
+Route::middleware(['auth', 'role:student', 'active-learning'])
+    ->prefix('ai-chat')
+    ->name('ai-chat.')
+    ->group(function () {
+        Route::get('/', [AiChatConversationController::class, 'index'])->name('index');
+        Route::post('conversations', [AiChatConversationController::class, 'store'])->name('conversations.store');
+        Route::get('conversations/{conversation}', [AiChatConversationController::class, 'show'])->name('conversations.show');
+        Route::patch('conversations/{conversation}', [AiChatConversationController::class, 'update'])->name('conversations.update');
+        Route::delete('conversations/{conversation}', [AiChatConversationController::class, 'destroy'])->name('conversations.destroy');
+        Route::post('conversations/{conversation}/messages', [AiChatConversationController::class, 'storeMessage'])
+            ->name('conversations.messages.store');
+    });
 
 // ============================================================
 // 開発専用: 共通コンポーネントショーケース(APP_ENV=local のみ表示)

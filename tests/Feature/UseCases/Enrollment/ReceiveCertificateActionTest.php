@@ -12,8 +12,11 @@ use App\Models\Enrollment;
 use App\Models\MockExam;
 use App\Models\MockExamSession;
 use App\Models\User;
+use App\Services\CertificatePdfService;
 use App\UseCases\Enrollment\ReceiveCertificateAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Storage;
+use RuntimeException;
 use Tests\TestCase;
 
 /**
@@ -26,6 +29,8 @@ class ReceiveCertificateActionTest extends TestCase
 
     public function test_successfully_issues_certificate_and_records_status_log_when_all_published_exams_passed(): void
     {
+        Storage::fake('private');
+
         $student = User::factory()->student()->inProgress()->create();
         $certification = Certification::factory()->published()->create();
         $enrollment = Enrollment::factory()->for($student)->for($certification)->learning()->create();
@@ -36,11 +41,14 @@ class ReceiveCertificateActionTest extends TestCase
 
         $this->assertSame($enrollment->id, $certificate->enrollment_id);
         $this->assertSame($student->id, $certificate->user_id);
+
         $this->assertDatabaseHas('enrollments', [
             'id' => $enrollment->id,
             'status' => EnrollmentStatus::Passed->value,
         ]);
+
         $this->assertNotNull($enrollment->refresh()->passed_at);
+
         $this->assertDatabaseHas('enrollment_status_logs', [
             'enrollment_id' => $enrollment->id,
             'from_status' => EnrollmentStatus::Learning->value,
@@ -48,6 +56,52 @@ class ReceiveCertificateActionTest extends TestCase
             'changed_by_user_id' => $student->id,
             'changed_reason' => '受講生による修了証受領',
         ]);
+
+        Storage::disk('private')->assertExists($certificate->pdf_path);
+    }
+
+    public function test_rolls_back_completion_when_pdf_generation_fails(): void
+    {
+        Storage::fake('private');
+
+        $student = User::factory()->student()->inProgress()->create();
+        $certification = Certification::factory()->published()->create();
+        $enrollment = Enrollment::factory()->for($student)->for($certification)->learning()->create();
+        $exam = MockExam::factory()->for($certification)->create(['is_published' => true]);
+        MockExamSession::factory()->for($enrollment)->for($exam)->create(['pass' => true]);
+
+        $this->mock(CertificatePdfService::class)
+            ->shouldReceive('generate')
+            ->once()
+            ->andThrow(new RuntimeException('PDF生成失敗'));
+
+        try {
+            app(ReceiveCertificateAction::class)($enrollment);
+
+            $this->fail('PDF生成失敗時にRuntimeExceptionが発生するはずです。');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('PDF生成失敗', $exception->getMessage());
+        }
+
+        $this->assertSame(
+            EnrollmentStatus::Learning,
+            $enrollment->refresh()->status
+        );
+
+        $this->assertNull($enrollment->passed_at);
+
+        $this->assertDatabaseCount('certificates', 0);
+
+        $this->assertDatabaseMissing('enrollment_status_logs', [
+            'enrollment_id' => $enrollment->id,
+            'to_status' => EnrollmentStatus::Passed->value,
+            'changed_reason' => '受講生による修了証受領',
+        ]);
+
+        $this->assertSame(
+            [],
+            Storage::disk('private')->allFiles('certificates')
+        );
     }
 
     public function test_throws_when_not_eligible_due_to_unpassed_exam(): void
@@ -55,18 +109,34 @@ class ReceiveCertificateActionTest extends TestCase
         $student = User::factory()->student()->inProgress()->create();
         $certification = Certification::factory()->published()->create();
         $enrollment = Enrollment::factory()->for($student)->for($certification)->learning()->create();
+
         $exam1 = MockExam::factory()->for($certification)->create(['is_published' => true]);
-        $exam2 = MockExam::factory()->for($certification)->create(['is_published' => true]);
+        MockExam::factory()->for($certification)->create(['is_published' => true]);
+
         MockExamSession::factory()->for($enrollment)->for($exam1)->create(['pass' => true]);
-        // exam2 は合格してない
 
-        $this->expectException(CompletionNotEligibleException::class);
+        try {
+            app(ReceiveCertificateAction::class)($enrollment);
 
-        app(ReceiveCertificateAction::class)($enrollment);
+            $this->fail('CompletionNotEligibleException が throw されるはずです。');
+        } catch (CompletionNotEligibleException) {
+            // 期待通り
+        }
 
-        // 念のため: Enrollment は learning のまま、Certificate も作成されないことを確認
-        $this->assertSame(EnrollmentStatus::Learning, $enrollment->refresh()->status);
+        $this->assertSame(
+            EnrollmentStatus::Learning,
+            $enrollment->refresh()->status
+        );
+
+        $this->assertNull($enrollment->passed_at);
+
         $this->assertDatabaseCount('certificates', 0);
+
+        $this->assertDatabaseMissing('enrollment_status_logs', [
+            'enrollment_id' => $enrollment->id,
+            'to_status' => EnrollmentStatus::Passed->value,
+            'changed_reason' => '受講生による修了証受領',
+        ]);
     }
 
     public function test_throws_when_enrollment_status_is_already_passed(): void
@@ -93,16 +163,20 @@ class ReceiveCertificateActionTest extends TestCase
     {
         $student = User::factory()->student()->inProgress()->create();
         $enrollment = Enrollment::factory()->for($student)->learning()->create();
-        // 公開模試 0 件 → eligibility false
 
         try {
             app(ReceiveCertificateAction::class)($enrollment);
-            $this->fail('CompletionNotEligibleException が throw されるはず');
+
+            $this->fail('CompletionNotEligibleException が throw されるはずです。');
         } catch (CompletionNotEligibleException) {
             // 期待通り
         }
 
         $this->assertDatabaseCount('certificates', 0);
-        $this->assertSame(EnrollmentStatus::Learning, $enrollment->refresh()->status);
+
+        $this->assertSame(
+            EnrollmentStatus::Learning,
+            $enrollment->refresh()->status
+        );
     }
 }

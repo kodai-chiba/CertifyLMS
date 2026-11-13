@@ -9,48 +9,67 @@ use App\Exceptions\Certification\CertificateAlreadyIssuedException;
 use App\Exceptions\Certification\EnrollmentNotPassedException;
 use App\Models\Certificate;
 use App\Models\Enrollment;
+use App\Services\CertificatePdfService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Throwable;
 
-/**
- * 修了証を発行するユースケース。受講生自己発火型の修了処理 `\App\UseCases\Enrollment\ReceiveCertificateAction` から呼び出される。
- *
- * 業務分岐:
- * - Enrollment が `status=passed` + `passed_at != null` でない: EnrollmentNotPassedException（409）
- * - 同一 Enrollment に対する二重呼出: CertificateAlreadyIssuedException（409、事前 lockForUpdate + exists で検出）
- *
- * 修了証レコードの INSERT は `DB::transaction()` 内で実行する。
- */
 final class IssueAction
 {
+    public function __construct(
+        private readonly CertificatePdfService $pdfService,
+    ) {}
+
     /**
-     * @throws EnrollmentNotPassedException 受講登録が修了状態ではない
-     * @throws CertificateAlreadyIssuedException 同一 Enrollment で修了証が既発行
+     * @throws EnrollmentNotPassedException
+     * @throws CertificateAlreadyIssuedException
      */
     public function __invoke(Enrollment $enrollment): Certificate
     {
-        if ($enrollment->status !== EnrollmentStatus::Passed || $enrollment->passed_at === null) {
-            throw new EnrollmentNotPassedException;
+        $pdfPath = 'certificates/'.Str::ulid().'.pdf';
+
+        try {
+            return DB::transaction(function () use (
+                $enrollment,
+                $pdfPath
+            ): Certificate {
+                $lockedEnrollment = Enrollment::query()
+                    ->whereKey($enrollment->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                if (
+                    $lockedEnrollment->status !== EnrollmentStatus::Passed
+                    || $lockedEnrollment->passed_at === null
+                ) {
+                    throw new EnrollmentNotPassedException;
+                }
+
+                $existing = Certificate::query()
+                    ->where('enrollment_id', $lockedEnrollment->id)
+                    ->first();
+
+                if ($existing !== null) {
+                    throw new CertificateAlreadyIssuedException;
+                }
+
+                $certificate = Certificate::create([
+                    'user_id' => $lockedEnrollment->user_id,
+                    'enrollment_id' => $lockedEnrollment->id,
+                    'certification_id' => $lockedEnrollment->certification_id,
+                    'pdf_path' => $pdfPath,
+                    'issued_at' => now(),
+                ]);
+
+                $this->pdfService->generate($certificate);
+
+                return $certificate;
+            });
+        } catch (Throwable $exception) {
+            Storage::disk('private')->delete($pdfPath);
+
+            throw $exception;
         }
-
-        return DB::transaction(function () use ($enrollment) {
-            // 二重発行ガード: lockForUpdate で同時呼出を直列化し、enrollment_id UNIQUE 違反を例外メッセージ判別ではなく事前 SELECT で確定検出する
-            $existing = Certificate::query()
-                ->where('enrollment_id', $enrollment->id)
-                ->lockForUpdate()
-                ->first();
-
-            if ($existing !== null) {
-                throw new CertificateAlreadyIssuedException;
-            }
-
-            return Certificate::create([
-                'user_id' => $enrollment->user_id,
-                'enrollment_id' => $enrollment->id,
-                'certification_id' => $enrollment->certification_id,
-                'pdf_path' => 'certificates/'.Str::ulid().'.pdf',
-                'issued_at' => now(),
-            ]);
-        });
     }
 }

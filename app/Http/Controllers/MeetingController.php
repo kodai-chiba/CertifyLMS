@@ -25,6 +25,7 @@ use App\Models\User;
 use App\Notifications\MeetingCanceledNotification;
 use App\Notifications\MeetingReservedNotification;
 use App\Services\CoachMeetingLoadService;
+use App\Services\GoogleCalendarService;
 use App\Services\MeetingAvailabilityService;
 use App\Services\MeetingQuotaService;
 use App\UseCases\MeetingQuota\ConsumeQuotaAction;
@@ -203,6 +204,7 @@ class MeetingController extends Controller
         StoreRequest $request,
         MeetingAvailabilityService $availabilityService,
         CoachMeetingLoadService $coachLoadService,
+        GoogleCalendarService $googleCalendarService,
         MeetingQuotaService $quotaService,
         ConsumeQuotaAction $consumeAction,
     ): RedirectResponse {
@@ -217,6 +219,7 @@ class MeetingController extends Controller
             $topic,
             $availabilityService,
             $coachLoadService,
+            $googleCalendarService,
             $quotaService,
             $consumeAction,
         ) {
@@ -226,7 +229,7 @@ class MeetingController extends Controller
 
             $availabilityService->validateSlot($enrollment->certification, $scheduledAt);
 
-            $candidates = $this->findAvailableCoaches($enrollment->certification, $scheduledAt);
+            $candidates = $this->findAvailableCoaches($enrollment->certification, $scheduledAt, $googleCalendarService);
 
             if ($candidates->isEmpty()) {
                 throw new MeetingNoAvailableCoachException;
@@ -275,6 +278,16 @@ class MeetingController extends Controller
                 }
             });
 
+            // LMSの予約確定後にGoogleカレンダーへ登録する。
+            // 外部APIの失敗はLMSの予約成立に影響させない。
+            DB::afterCommit(function () use ($meeting, $googleCalendarService): void {
+                try {
+                    $googleCalendarService->createMeetingEvent($meeting);
+                } catch (Throwable $e) {
+                    report($e);
+                }
+            });
+
             return $meeting->fresh();
         });
 
@@ -290,12 +303,13 @@ class MeetingController extends Controller
     public function cancel(
         Meeting $meeting,
         RefundQuotaAction $refundAction,
+        GoogleCalendarService $googleCalendarService,
     ): RedirectResponse {
         $this->authorize('cancel', $meeting);
 
         $actor = auth()->user();
 
-        DB::transaction(function () use ($meeting, $actor, $refundAction): void {
+        DB::transaction(function () use ($meeting, $actor, $refundAction, $googleCalendarService): void {
             $locked = Meeting::query()
                 ->whereKey($meeting->id)
                 ->lockForUpdate()
@@ -318,6 +332,16 @@ class MeetingController extends Controller
             // キャンセルと面談回数の返却を同一トランザクション内で行う。
             $student = User::query()->findOrFail($locked->student_id);
             ($refundAction)($student, $locked->id);
+
+            // LMSのキャンセル確定後にGoogleカレンダーのイベントを削除する。
+            // 外部APIの失敗はLMSのキャンセルや面談回数返却に影響させない。
+            DB::afterCommit(function () use ($locked, $googleCalendarService): void {
+                try {
+                    $googleCalendarService->deleteMeetingEvent($locked);
+                } catch (Throwable $e) {
+                    report($e);
+                }
+            });
 
             // トランザクション確定後、キャンセル実行者の相手にのみ通知する。
             DB::afterCommit(function () use ($locked, $actor): void {
@@ -390,12 +414,16 @@ class MeetingController extends Controller
 
     /**
      * 担当コーチ集合のうち、(1) 当該時刻に有効な availability 枠があり、
-     * (2) 当該時刻に reserved / completed の Meeting を持たないコーチ集合を返す。
+     * (2) 当該時刻に reserved / completed の Meeting を持たず、
+     * (3) Googleカレンダーにも重複予定がないコーチ集合を返す。
      *
      * @return Collection<int, User>
      */
-    private function findAvailableCoaches(Certification $certification, Carbon $scheduledAt): Collection
-    {
+    private function findAvailableCoaches(
+        Certification $certification,
+        Carbon $scheduledAt,
+        GoogleCalendarService $googleCalendarService
+    ): Collection {
         $time = $scheduledAt->format('H:i:s');
 
         return $certification->coaches()
@@ -409,6 +437,12 @@ class MeetingController extends Controller
                 $q->where('scheduled_at', $scheduledAt)
                     ->whereIn('status', [MeetingStatus::Reserved->value, MeetingStatus::Completed->value]);
             })
-            ->get();
+            ->get()
+            ->filter(fn (User $coach): bool => ! $googleCalendarService->isBusy(
+                $coach,
+                $scheduledAt,
+                $scheduledAt->copy()->addHour(),
+            ))
+            ->values();
     }
 }

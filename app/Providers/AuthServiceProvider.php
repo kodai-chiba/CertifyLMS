@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Providers;
 
+use App\Models\AiChatConversation;
+use App\Models\Certificate;
 use App\Models\Certification;
 use App\Models\CertificationCategory;
 use App\Models\Chapter;
@@ -26,6 +28,8 @@ use App\Models\SectionQuestion;
 use App\Models\SectionQuestionAnswer;
 use App\Models\SectionQuestionAttempt;
 use App\Models\User;
+use App\Policies\AiChatConversationPolicy;
+use App\Policies\CertificatePolicy;
 use App\Policies\CertificationCategoryPolicy;
 use App\Policies\CertificationPolicy;
 use App\Policies\ChapterPolicy;
@@ -67,11 +71,13 @@ class AuthServiceProvider extends ServiceProvider
     protected $policies = [
         Invitation::class => InvitationPolicy::class,
         User::class => UserPolicy::class,
+        Certificate::class => CertificatePolicy::class,
         Certification::class => CertificationPolicy::class,
         CertificationCategory::class => CertificationCategoryPolicy::class,
         Part::class => PartPolicy::class,
         Chapter::class => ChapterPolicy::class,
         ChatRoom::class => ChatRoomPolicy::class,
+        AiChatConversation::class => AiChatConversationPolicy::class,
         Section::class => SectionPolicy::class,
         SectionImage::class => SectionImagePolicy::class,
         SectionQuestion::class => SectionQuestionPolicy::class,
@@ -94,18 +100,12 @@ class AuthServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        // 面談回数履歴の閲覧は Model に直接紐づかない受講生 Ability として Gate 登録する
         Gate::define('view-meeting-quota-history', [MeetingQuotaPolicy::class, 'viewHistory']);
 
-        // 受講生視点の教材閲覧認可: 既存の admin / coach 用 PartPolicy / ChapterPolicy / SectionPolicy が
-        // Model::class に auto-bind されているため、別 Gate 名で受講生用 View Policy を登録して両立させる。
         Gate::define('learning.part.view', [PartViewPolicy::class, 'view']);
         Gate::define('learning.chapter.view', [ChapterViewPolicy::class, 'view']);
         Gate::define('learning.section.view', [SectionViewPolicy::class, 'view']);
 
-        // Section 紐づき問題演習 / 苦手分野ドリル / 解答送信用 Gate。
-        // Section / Enrollment / SectionQuestion へ auto-bind されている既存 Policy と
-        // 衝突しないよう、別 ability 名で登録する。
         Gate::define('quiz.section.view', [SectionQuizPolicy::class, 'view']);
         Gate::define('quiz.weak-drill.view', [WeakDrillPolicy::class, 'view']);
         Gate::define('quiz.answer.create', [SectionQuestionAnswerPolicy::class, 'create']);

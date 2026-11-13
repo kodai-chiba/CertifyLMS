@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace Tests\Feature\Http\Enrollment;
 
 use App\Enums\EnrollmentStatus;
+use App\Models\Certificate;
 use App\Models\Certification;
 use App\Models\Enrollment;
 use App\Models\MockExam;
 use App\Models\MockExamSession;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 /**
@@ -69,12 +71,14 @@ class EnrollmentControllerTest extends TestCase
         ]);
 
         $response->assertRedirect();
+
         $this->assertDatabaseHas('enrollments', [
             'user_id' => $student->id,
             'certification_id' => $certification->id,
             'status' => EnrollmentStatus::Learning->value,
             'current_term' => 'basic_learning',
         ]);
+
         $this->assertDatabaseHas('enrollment_status_logs', [
             'changed_reason' => '新規登録',
             'changed_by_user_id' => $student->id,
@@ -99,6 +103,7 @@ class EnrollmentControllerTest extends TestCase
     {
         $student = User::factory()->student()->inProgress()->create();
         $certification = Certification::factory()->published()->create();
+
         Enrollment::factory()->for($student)->for($certification)->create();
 
         $response = $this->actingAs($student)->postJson(route('enrollments.store'), [
@@ -131,6 +136,7 @@ class EnrollmentControllerTest extends TestCase
         ]);
 
         $response->assertRedirect();
+
         $this->assertDatabaseHas('enrollments', [
             'user_id' => $student->id,
             'certification_id' => $certification->id,
@@ -140,31 +146,25 @@ class EnrollmentControllerTest extends TestCase
 
     public function test_graduated_student_cannot_use_student_only_routes(): void
     {
-        // Arrange
         $graduated = User::factory()->student()->graduated()->create();
         $certification = Certification::factory()->published()->create();
 
-        // Act: 自己登録は student + active-learning 専用 route
         $response = $this->actingAs($graduated)->postJson(route('enrollments.store'), [
             'certification_id' => $certification->id,
         ]);
 
-        // Assert: active-learning Middleware で 403
         $response->assertForbidden();
     }
 
     public function test_coach_cannot_use_student_only_routes(): void
     {
-        // Arrange
         $coach = User::factory()->coach()->inProgress()->create();
         $certification = Certification::factory()->published()->create();
 
-        // Act: 自己登録は student 専用 route
         $response = $this->actingAs($coach)->postJson(route('enrollments.store'), [
             'certification_id' => $certification->id,
         ]);
 
-        // Assert: role:student Middleware で 403
         $response->assertForbidden();
     }
 
@@ -203,7 +203,6 @@ class EnrollmentControllerTest extends TestCase
 
         $response = $this->actingAs($student)->deleteJson(route('enrollments.destroy', $enrollment));
 
-        // Policy::delete で status=Learning に絞っているため 403
         $response->assertForbidden();
     }
 
@@ -215,7 +214,9 @@ class EnrollmentControllerTest extends TestCase
         $response = $this->actingAs($student)->post(route('enrollments.resume', $enrollment));
 
         $response->assertRedirect();
+
         $this->assertSame(EnrollmentStatus::Learning, $enrollment->fresh()->status);
+
         $this->assertDatabaseHas('enrollment_status_logs', [
             'enrollment_id' => $enrollment->id,
             'from_status' => EnrollmentStatus::Failed->value,
@@ -232,23 +233,37 @@ class EnrollmentControllerTest extends TestCase
 
         $response = $this->actingAs($student)->postJson(route('enrollments.resume', $enrollment));
 
-        // Policy::resume で status=Failed に絞っているため 403
         $response->assertForbidden();
     }
 
     public function test_receive_certificate_succeeds_when_eligible(): void
     {
+        Storage::fake('private');
+
         $student = User::factory()->student()->inProgress()->create();
         $certification = Certification::factory()->published()->create();
         $enrollment = Enrollment::factory()->for($student)->for($certification)->learning()->create();
         $exam = MockExam::factory()->for($certification)->create(['is_published' => true]);
+
         MockExamSession::factory()->for($enrollment)->for($exam)->create(['pass' => true]);
 
-        $response = $this->actingAs($student)->post(route('enrollments.receiveCertificate', $enrollment));
+        $response = $this->actingAs($student)->post(
+            route('enrollments.receiveCertificate', $enrollment)
+        );
 
         $response->assertRedirect(route('enrollments.show', $enrollment));
+
         $this->assertSame(EnrollmentStatus::Passed, $enrollment->fresh()->status);
-        $this->assertDatabaseHas('certificates', ['enrollment_id' => $enrollment->id]);
+
+        $this->assertDatabaseHas('certificates', [
+            'enrollment_id' => $enrollment->id,
+        ]);
+
+        $certificate = Certificate::query()
+            ->where('enrollment_id', $enrollment->id)
+            ->firstOrFail();
+
+        Storage::disk('private')->assertExists($certificate->pdf_path);
     }
 
     public function test_receive_certificate_returns_409_when_not_eligible(): void
@@ -256,12 +271,15 @@ class EnrollmentControllerTest extends TestCase
         $student = User::factory()->student()->inProgress()->create();
         $certification = Certification::factory()->published()->create();
         $enrollment = Enrollment::factory()->for($student)->for($certification)->learning()->create();
-        // 公開模試 0 件で eligibility false
 
-        $response = $this->actingAs($student)->postJson(route('enrollments.receiveCertificate', $enrollment));
+        // 公開模試 0 件で eligibility false
+        $response = $this->actingAs($student)->postJson(
+            route('enrollments.receiveCertificate', $enrollment)
+        );
 
         $this->assertSame(409, $response->status());
         $this->assertSame(EnrollmentStatus::Learning, $enrollment->fresh()->status);
+        $this->assertDatabaseCount('certificates', 0);
     }
 
     public function test_receive_certificate_returns_403_for_non_owner(): void
@@ -269,7 +287,9 @@ class EnrollmentControllerTest extends TestCase
         $student = User::factory()->student()->inProgress()->create();
         $otherEnrollment = Enrollment::factory()->learning()->create();
 
-        $response = $this->actingAs($student)->postJson(route('enrollments.receiveCertificate', $otherEnrollment));
+        $response = $this->actingAs($student)->postJson(
+            route('enrollments.receiveCertificate', $otherEnrollment)
+        );
 
         $response->assertForbidden();
     }
@@ -279,9 +299,10 @@ class EnrollmentControllerTest extends TestCase
         $graduated = User::factory()->student()->graduated()->create();
         $enrollment = Enrollment::factory()->for($graduated)->learning()->create();
 
-        $response = $this->actingAs($graduated)->postJson(route('enrollments.receiveCertificate', $enrollment));
+        $response = $this->actingAs($graduated)->postJson(
+            route('enrollments.receiveCertificate', $enrollment)
+        );
 
-        // active-learning Middleware で 403
         $response->assertForbidden();
     }
 }
