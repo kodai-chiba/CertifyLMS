@@ -88,7 +88,7 @@ class IndexTest extends TestCase
     public function test_status_filter_excludes_withdrawn_by_default(): void
     {
         $admin = User::factory()->admin()->create();
-        $active = User::factory()->create(['email' => 'active@example.test']);
+        User::factory()->create(['email' => 'active@example.test']);
         $gone = User::factory()->create(['email' => 'gone@example.test']);
         app(UserWithdrawalService::class)->withdraw($gone);
 
@@ -116,6 +116,63 @@ class IndexTest extends TestCase
         $response->assertDontSee('active@example.test');
     }
 
+    public function test_in_progress_filter_excludes_withdrawn_users(): void
+    {
+        $admin = User::factory()->admin()->create();
+        User::factory()->student()->create(['email' => 'active@example.test']);
+        $gone = User::factory()->student()->create(['email' => 'gone@example.test']);
+        app(UserWithdrawalService::class)->withdraw($gone);
+        $renamedEmail = $gone->fresh()->email;
+
+        $response = $this->actingAs($admin)->get(route('admin.users.index', [
+            'status' => UserStatus::InProgress->value,
+        ]));
+
+        $response->assertOk();
+        $response->assertSee('active@example.test');
+        $response->assertDontSee($renamedEmail);
+    }
+
+    public function test_graduated_filter_excludes_withdrawn_users(): void
+    {
+        $admin = User::factory()->admin()->create();
+        User::factory()->student()->create([
+            'email' => 'graduated@example.test',
+            'status' => UserStatus::Graduated->value,
+        ]);
+        $gone = User::factory()->student()->create([
+            'email' => 'gone@example.test',
+            'status' => UserStatus::Graduated->value,
+        ]);
+        app(UserWithdrawalService::class)->withdraw($gone);
+        $renamedEmail = $gone->fresh()->email;
+
+        $response = $this->actingAs($admin)->get(route('admin.users.index', [
+            'status' => UserStatus::Graduated->value,
+        ]));
+
+        $response->assertOk();
+        $response->assertSee('graduated@example.test');
+        $response->assertDontSee($renamedEmail);
+    }
+
+    public function test_role_filter_excludes_withdrawn_users_when_status_is_not_selected(): void
+    {
+        $admin = User::factory()->admin()->create();
+        User::factory()->student()->create(['email' => 'active@example.test']);
+        $gone = User::factory()->student()->create(['email' => 'gone@example.test']);
+        app(UserWithdrawalService::class)->withdraw($gone);
+        $renamedEmail = $gone->fresh()->email;
+
+        $response = $this->actingAs($admin)->get(route('admin.users.index', [
+            'role' => 'student',
+        ]));
+
+        $response->assertOk();
+        $response->assertSee('active@example.test');
+        $response->assertDontSee($renamedEmail);
+    }
+
     public function test_paginates_20_per_page(): void
     {
         $admin = User::factory()->admin()->create();
@@ -133,15 +190,15 @@ class IndexTest extends TestCase
     {
         $admin = User::factory()->admin()->create();
 
-        $oldInvited = User::factory()->invited()->create([
+        User::factory()->invited()->create([
             'email' => 'old-invited@example.test',
             'created_at' => now()->subDays(5),
         ]);
-        $newActive = User::factory()->create([
+        User::factory()->create([
             'email' => 'new-active@example.test',
             'created_at' => now()->subHour(),
         ]);
-        $oldActive = User::factory()->create([
+        User::factory()->create([
             'email' => 'old-active@example.test',
             'created_at' => now()->subDays(10),
         ]);
