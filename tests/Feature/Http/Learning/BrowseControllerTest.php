@@ -192,6 +192,39 @@ class BrowseControllerTest extends TestCase
             ->assertNotFound();
     }
 
+    public function test_show_part_404_when_certification_draft(): void
+    {
+        [$student, $part] = $this->buildDraftCertificationPart();
+
+        $this->actingAs($student)
+            ->get(route('learning.parts.show', $part))
+            ->assertNotFound();
+    }
+
+    public function test_show_chapter_404_when_certification_draft(): void
+    {
+        [$student, $part] = $this->buildDraftCertificationPart();
+        $chapter = Chapter::factory()->for($part)->create(['status' => ContentStatus::Published->value]);
+
+        $this->actingAs($student)
+            ->get(route('learning.chapters.show', $chapter))
+            ->assertNotFound();
+    }
+
+    public function test_show_section_404_when_certification_draft(): void
+    {
+        [$student, $part] = $this->buildDraftCertificationPart();
+        $chapter = Chapter::factory()->for($part)->create(['status' => ContentStatus::Published->value]);
+        $section = Section::factory()->for($chapter)->create([
+            'status' => ContentStatus::Published->value,
+            'body' => '# テスト本文',
+        ]);
+
+        $this->actingAs($student)
+            ->get(route('learning.sections.show', $section))
+            ->assertNotFound();
+    }
+
     /**
      * @return array{0: User, 1: Certification}
      */
@@ -229,6 +262,23 @@ class BrowseControllerTest extends TestCase
     {
         $student = User::factory()->student()->inProgress()->create();
         $certification = Certification::factory()->archived()->create();
+        Enrollment::factory()->for($student)->for($certification)->learning()->create();
+        $part = Part::factory()->for($certification)->create(['status' => ContentStatus::Published->value]);
+
+        return [$student, $part];
+    }
+
+    /**
+     * 受講登録(learning)済みだが資格が公開停止(draft)のシナリオ。配下 Part は Published。
+     *
+     * @return array{0: User, 1: Part}
+     */
+    private function buildDraftCertificationPart(): array
+    {
+        $student = User::factory()->student()->inProgress()->create();
+        $certification = Certification::factory()->create([
+            'status' => 'draft',
+        ]);
         Enrollment::factory()->for($student)->for($certification)->learning()->create();
         $part = Part::factory()->for($certification)->create(['status' => ContentStatus::Published->value]);
 
