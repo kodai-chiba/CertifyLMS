@@ -279,4 +279,46 @@ class OnboardActionTest extends TestCase
             'password' => 'secret-pass',
         ]);
     }
+
+    public function test_cannot_reuse_invitation_after_successful_onboarding(): void
+    {
+        [$invitation, $user] = $this->setupInvitedUser();
+
+        $action = app(OnboardAction::class);
+
+        $action($invitation, [
+            'name' => '初回登録',
+            'password' => 'first-password',
+        ]);
+
+        $user->refresh();
+        $invitation->refresh();
+
+        $this->assertSame(UserStatus::InProgress, $user->status);
+        $this->assertSame(InvitationStatus::Accepted, $invitation->status);
+        $this->assertNotNull($invitation->accepted_at);
+
+        $originalPasswordHash = $user->password;
+
+        try {
+            $action($invitation, [
+                'name' => '再登録',
+                'password' => 'second-password',
+            ]);
+
+            $this->fail('使用済みの招待で再登録できてはいけません。');
+        } catch (InvalidInvitationTokenException) {
+            // 使用済みの招待は拒否される
+        }
+
+        $user->refresh();
+        $invitation->refresh();
+
+        $this->assertSame('初回登録', $user->name);
+        $this->assertSame($originalPasswordHash, $user->password);
+        $this->assertTrue(Hash::check('first-password', $user->password));
+        $this->assertFalse(Hash::check('second-password', $user->password));
+        $this->assertSame(UserStatus::InProgress, $user->status);
+        $this->assertSame(InvitationStatus::Accepted, $invitation->status);
+    }
 }
