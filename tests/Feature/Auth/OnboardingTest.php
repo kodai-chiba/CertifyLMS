@@ -13,6 +13,7 @@ use App\Models\Plan;
 use App\Models\User;
 use App\Services\InvitationTokenService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\URL;
 use Tests\TestCase;
 
@@ -338,5 +339,53 @@ class OnboardingTest extends TestCase
             'status' => UserStatus::InProgress->value,
             'meeting_url' => null,
         ]);
+    }
+
+    public function test_cannot_reuse_signed_invitation_urls_after_successful_onboarding(): void
+    {
+        $invitation = $this->freshInvitation();
+
+        $showUrl = $this->signedShowUrl($invitation);
+        $storeUrl = $this->postUrl($invitation);
+
+        $firstResponse = $this->post($storeUrl, [
+            'name' => '初回登録',
+            'password' => 'first-password',
+            'password_confirmation' => 'first-password',
+        ]);
+
+        $firstResponse->assertRedirect(route('dashboard.index'));
+
+        $user = $invitation->user->fresh();
+        $invitation->refresh();
+
+        $this->assertSame(UserStatus::InProgress, $user->status);
+        $this->assertSame(InvitationStatus::Accepted, $invitation->status);
+        $this->assertNotNull($invitation->accepted_at);
+
+        $originalPasswordHash = $user->password;
+
+        $showResponse = $this->get($showUrl);
+
+        $showResponse->assertOk();
+        $showResponse->assertViewIs('auth.invitation-invalid');
+
+        $secondResponse = $this->post($storeUrl, [
+            'name' => '再登録',
+            'password' => 'second-password',
+            'password_confirmation' => 'second-password',
+        ]);
+
+        $secondResponse->assertStatus(410);
+
+        $user->refresh();
+        $invitation->refresh();
+
+        $this->assertSame('初回登録', $user->name);
+        $this->assertSame($originalPasswordHash, $user->password);
+        $this->assertTrue(Hash::check('first-password', $user->password));
+        $this->assertFalse(Hash::check('second-password', $user->password));
+        $this->assertSame(UserStatus::InProgress, $user->status);
+        $this->assertSame(InvitationStatus::Accepted, $invitation->status);
     }
 }
