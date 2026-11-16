@@ -11,13 +11,18 @@ use App\Models\SectionProgress;
 use App\Models\User;
 use App\Services\MarkdownRenderingService;
 use App\Services\SectionQuestionScoreService;
+use Illuminate\Support\Facades\Gate;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 /**
  * /learning/sections/{section} (5 階層目、Section 詳細) のデータを準備する Action。
  *
- * cascade visibility (Section / Chapter / Part / 親資格のいずれかが非公開または SoftDelete 済) を 404 で弾き、
- * Markdown 本文を MarkdownRenderingService::toHtml で HTML 化し、読了状態と前後 Section を併せて返す。
+ * cascade visibility (Section / Chapter / Part / 親資格のいずれかが非公開または SoftDelete 済) を 404 で弾く。
+ * 公開状態の確認後、learning.section.view Gate で受講登録を検証し、
+ * 未登録または閲覧不可の受講状態であれば 403 を返す。
+ *
+ * 認可通過後、Markdown 本文を MarkdownRenderingService::toHtml で HTML 化し、
+ * 読了状態と前後 Section を併せて返す。
  */
 final class ShowSectionAction
 {
@@ -42,6 +47,8 @@ final class ShowSectionAction
             || $part->certification->status !== CertificationStatus::Published) {
             throw new NotFoundHttpException;
         }
+
+        Gate::forUser($student)->authorize('learning.section.view', $section);
 
         $siblingSections = $chapter->sections()
             ->where('status', ContentStatus::Published->value)
