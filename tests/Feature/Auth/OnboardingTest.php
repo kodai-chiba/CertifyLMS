@@ -388,4 +388,46 @@ class OnboardingTest extends TestCase
         $this->assertSame(UserStatus::InProgress, $user->status);
         $this->assertSame(InvitationStatus::Accepted, $invitation->status);
     }
+
+    public function test_student_can_login_again_and_access_learning_after_onboarding(): void
+    {
+        $invitation = $this->freshInvitation();
+        $user = $invitation->user;
+
+        $onboardingResponse = $this->post($this->postUrl($invitation), [
+            'name' => '受講太郎',
+            'password' => 'secret-pass',
+            'password_confirmation' => 'secret-pass',
+        ]);
+
+        $onboardingResponse->assertRedirect(route('dashboard.index'));
+        $this->assertAuthenticatedAs($user);
+
+        $user->refresh();
+
+        $this->assertSame(UserStatus::InProgress, $user->status);
+        $this->assertTrue($user->profile_setup_completed);
+        $this->assertTrue(Hash::check('secret-pass', $user->password));
+        $this->assertNotNull($user->plan_started_at);
+        $this->assertNotNull($user->plan_expires_at);
+
+        $logoutResponse = $this->post(route('logout'));
+
+        $logoutResponse->assertRedirect();
+        $this->assertGuest();
+
+        $loginResponse = $this->post('/login', [
+            'email' => $user->email,
+            'password' => 'secret-pass',
+        ]);
+
+        $loginResponse->assertRedirect(config('fortify.home'));
+        $this->assertAuthenticatedAs($user);
+        $this->assertNotNull($user->fresh()->last_login_at);
+
+        $learningResponse = $this->get(route('learning.index'));
+
+        $learningResponse->assertOk();
+        $learningResponse->assertViewIs('learning.index');
+    }
 }
