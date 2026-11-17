@@ -87,6 +87,73 @@ class IndexTest extends TestCase
         $response->assertDontSee('Archived One');
     }
 
+    public function test_status_filter_returns_only_draft_certifications(): void
+    {
+        $admin = User::factory()->admin()->create();
+        Certification::factory()->draft()->create(['name' => 'Draft Only']);
+        Certification::factory()->published()->create(['name' => 'Published Excluded']);
+        Certification::factory()->archived()->create(['name' => 'Archived Excluded']);
+
+        $response = $this->actingAs($admin)->get(route('admin.certifications.index', ['status' => 'draft']));
+
+        $response->assertOk();
+        $response->assertSee('Draft Only');
+        $response->assertDontSee('Published Excluded');
+        $response->assertDontSee('Archived Excluded');
+    }
+
+    public function test_status_filter_returns_only_archived_certifications(): void
+    {
+        $admin = User::factory()->admin()->create();
+        Certification::factory()->draft()->create(['name' => 'Draft Excluded']);
+        Certification::factory()->published()->create(['name' => 'Published Excluded']);
+        Certification::factory()->archived()->create(['name' => 'Archived Only']);
+
+        $response = $this->actingAs($admin)->get(route('admin.certifications.index', ['status' => 'archived']));
+
+        $response->assertOk();
+        $response->assertSee('Archived Only');
+        $response->assertDontSee('Draft Excluded');
+        $response->assertDontSee('Published Excluded');
+    }
+
+    public function test_coach_status_filter_returns_only_matching_assigned_certifications(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $coach = User::factory()->coach()->create();
+
+        $assignedPublished = Certification::factory()->published()->create([
+            'name' => 'Assigned Published',
+        ]);
+
+        $assignedDraft = Certification::factory()->draft()->create([
+            'name' => 'Assigned Draft',
+        ]);
+
+        $unassignedPublished = Certification::factory()->published()->create([
+            'name' => 'Unassigned Published',
+        ]);
+
+        foreach ([$assignedPublished, $assignedDraft] as $certification) {
+            CertificationCoachAssignment::create([
+                'id' => (string) Str::ulid(),
+                'certification_id' => $certification->id,
+                'user_id' => $coach->id,
+                'assigned_by_user_id' => $admin->id,
+                'assigned_at' => now(),
+            ]);
+        }
+
+        $response = $this->actingAs($coach)->get(route('admin.certifications.index', [
+            'status' => 'published',
+        ]));
+
+        $response->assertOk();
+        $response->assertSee('Assigned Published');
+        $response->assertDontSee('Assigned Draft');
+        $response->assertDontSee('Unassigned Published');
+    }
+
     public function test_category_filter(): void
     {
         $admin = User::factory()->admin()->create();
