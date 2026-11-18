@@ -181,6 +181,55 @@ class EnrollmentTest extends TestCase
         $this->assertTrue($results->first()->is($assigned));
     }
 
+    public function test_scope_for_user_coach_without_assignments_returns_no_enrollments(): void
+    {
+        // Arrange: 担当資格が存在しないコーチ
+        $coach = User::factory()->coach()->create();
+        Enrollment::factory()->count(2)->create();
+
+        // Act
+        $results = Enrollment::forUser($coach)->get();
+
+        // Assert
+        $this->assertCount(0, $results, '担当資格が0件の coach は enrollment を取得できないはず');
+    }
+
+    public function test_scope_for_user_coach_excludes_unassigned_certifications(): void
+    {
+        // Arrange: 現役担当資格と担当解除済み資格を用意
+        $coach = User::factory()->coach()->create();
+        $admin = User::factory()->admin()->create();
+
+        $activeCert = Certification::factory()->published()->create();
+        $unassignedCert = Certification::factory()->published()->create();
+
+        CertificationCoachAssignment::create([
+            'certification_id' => $activeCert->id,
+            'user_id' => $coach->id,
+            'assigned_by_user_id' => $admin->id,
+            'assigned_at' => now()->subDays(2),
+        ]);
+
+        CertificationCoachAssignment::create([
+            'certification_id' => $unassignedCert->id,
+            'user_id' => $coach->id,
+            'assigned_by_user_id' => $admin->id,
+            'assigned_at' => now()->subDays(10),
+            'unassigned_at' => now()->subDay(),
+        ]);
+
+        $activeEnrollment = Enrollment::factory()->for($activeCert)->create();
+        $unassignedEnrollment = Enrollment::factory()->for($unassignedCert)->create();
+
+        // Act
+        $results = Enrollment::forUser($coach)->get();
+
+        // Assert
+        $this->assertCount(1, $results, '担当解除済み資格の enrollment は取得できないはず');
+        $this->assertTrue($results->first()->is($activeEnrollment));
+        $this->assertFalse($results->contains(fn (Enrollment $enrollment) => $enrollment->is($unassignedEnrollment)));
+    }
+
     public function test_scope_for_user_student_returns_only_own_enrollments(): void
     {
         // Arrange
