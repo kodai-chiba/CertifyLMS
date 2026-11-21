@@ -44,6 +44,27 @@ class CertificateDownloadTest extends TestCase
         $response->assertDownload('certificate-'.$certificate->id.'.pdf');
     }
 
+    public function test_graduated_student_can_download_own_certificate(): void
+    {
+        $student = User::factory()->student()->graduated()->create();
+
+        $certificate = Certificate::factory()
+            ->for($student)
+            ->create();
+
+        Storage::disk('private')->put(
+            $certificate->pdf_path,
+            '%PDF-1.4 test certificate %%EOF'
+        );
+
+        $response = $this->actingAs($student)
+            ->get(route('certificates.download', $certificate));
+
+        $response->assertOk();
+        $response->assertHeader('content-type', 'application/pdf');
+        $response->assertDownload('certificate-'.$certificate->id.'.pdf');
+    }
+
     public function test_student_cannot_download_another_students_certificate(): void
     {
         $student = User::factory()->student()->create();
