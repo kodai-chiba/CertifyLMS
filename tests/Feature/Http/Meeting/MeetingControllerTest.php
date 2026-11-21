@@ -453,6 +453,52 @@ class MeetingControllerTest extends TestCase
         $response->assertForbidden();
     }
 
+    public function test_store_rejects_duplicate_active_coach_slot_without_consuming_quota(): void
+    {
+        // Arrange: 1人のコーチに対して、2人の受講生が同じ日時を予約する。
+        $firstStudent = User::factory()->student()->inProgress()->create(['max_meetings' => 3]);
+        $secondStudent = User::factory()->student()->inProgress()->create(['max_meetings' => 3]);
+        $admin = User::factory()->admin()->create();
+        $coach = User::factory()->coach()->inProgress()->create([
+            'meeting_url' => 'https://meet.example.com/coach-room',
+        ]);
+        $certification = Certification::factory()->published()->create();
+        $this->attachCoach($certification, $coach, $admin);
+        CoachAvailability::factory()->forCoach($coach)->onDay(1)->timeRange('09:00:00', '18:00:00')->create();
+
+        $firstEnrollment = Enrollment::factory()->for($firstStudent, 'user')->for($certification)->learning()->create();
+        $secondEnrollment = Enrollment::factory()->for($secondStudent, 'user')->for($certification)->learning()->create();
+        $scheduledAt = now()->startOfDay()->next(Carbon::MONDAY)->setTime(10, 0);
+        $payload = [
+            'scheduled_at' => $scheduledAt->format('Y-m-d\TH:i:s'),
+            'topic' => '相談したい',
+        ];
+        $quotaService = app(MeetingQuotaService::class);
+
+        // Act: 先行予約を確定した後、別の受講生が同じ枠を予約する。
+        $this->actingAs($firstStudent)
+            ->post(route('meetings.store', $firstEnrollment), $payload)
+            ->assertRedirect();
+
+        $response = $this->actingAs($secondStudent)
+            ->postJson(route('meetings.store', $secondEnrollment), $payload);
+
+        // Assert: 後続予約は拒否され、先行予約と両者の面談回数が正しく維持される。
+        $response->assertUnprocessable();
+        $this->assertDatabaseCount('meetings', 1);
+        $this->assertDatabaseHas('meetings', [
+            'coach_id' => $coach->id,
+            'student_id' => $firstStudent->id,
+            'enrollment_id' => $firstEnrollment->id,
+            'scheduled_at' => $scheduledAt->format('Y-m-d H:i:s'),
+            'status' => MeetingStatus::Reserved->value,
+        ]);
+        $this->assertDatabaseMissing('meetings', ['enrollment_id' => $secondEnrollment->id]);
+        $this->assertSame(2, $quotaService->remaining($firstStudent));
+        $this->assertSame(3, $quotaService->remaining($secondStudent));
+        $this->assertSame(0, MeetingQuotaTransaction::query()->where('user_id', $secondStudent->id)->count());
+    }
+
     public function test_store_allows_rebooking_canceled_coach_slot(): void
     {
         // Arrange: 同じコーチ・同じ日時にキャンセル済み面談が存在する。
