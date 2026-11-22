@@ -13,6 +13,7 @@ use App\Models\Meeting;
 use App\Models\User;
 use App\Services\ChatUnreadCountService;
 use App\UseCases\Dashboard\FetchCoachDashboardAction;
+use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Mockery;
@@ -56,6 +57,58 @@ class FetchCoachDashboardActionTest extends TestCase
 
         $first = $vm->assignedEnrollments->first();
         $this->assertNotNull($first->last_activity_at);
+    }
+
+    public function test_last_activity_at_is_latest_learning_session_start_time(): void
+    {
+        $coach = User::factory()->coach()->inProgress()->create();
+        $cert = Certification::factory()->published()->create();
+        $this->attachCoach($cert, $coach);
+
+        $enrollment = Enrollment::factory()->for($cert)->learning()->create();
+
+        $olderStartedAt = now()->subDays(3)->startOfSecond();
+        $latestStartedAt = now()->subDay()->startOfSecond();
+
+        LearningSession::factory()
+            ->forEnrollment($enrollment)
+            ->forUser($enrollment->user)
+            ->closed()
+            ->startedOn($latestStartedAt)
+            ->create();
+
+        LearningSession::factory()
+            ->forEnrollment($enrollment)
+            ->forUser($enrollment->user)
+            ->closed()
+            ->startedOn($olderStartedAt)
+            ->create();
+
+        $vm = app(FetchCoachDashboardAction::class)($coach);
+
+        $actual = $vm->assignedEnrollments->first()->last_activity_at;
+
+        $this->assertNotNull($actual);
+        $this->assertSame(
+            $latestStartedAt->toDateTimeString(),
+            Carbon::parse($actual)->toDateTimeString(),
+        );
+    }
+
+    public function test_last_activity_at_is_null_without_learning_sessions(): void
+    {
+        $coach = User::factory()->coach()->inProgress()->create();
+        $cert = Certification::factory()->published()->create();
+        $this->attachCoach($cert, $coach);
+
+        $enrollment = Enrollment::factory()->for($cert)->learning()->create();
+
+        $vm = app(FetchCoachDashboardAction::class)($coach);
+
+        $assignedEnrollment = $vm->assignedEnrollments->firstWhere('id', $enrollment->id);
+
+        $this->assertNotNull($assignedEnrollment);
+        $this->assertNull($assignedEnrollment->last_activity_at);
     }
 
     public function test_only_passed_and_learning_enrollments_are_displayed(): void
