@@ -31,7 +31,9 @@ class MockExamIndexQueryCountTest extends TestCase
         $baseline = $this->countQueriesFor(
             fn () => $this->actingAs($admin)->get(route('admin.mock-exams.index'))
         );
+
         $this->createMockExams($certification, 10);
+
         $scaled = $this->countQueriesFor(
             fn () => $this->actingAs($admin)->get(route('admin.mock-exams.index'))
         );
@@ -51,13 +53,16 @@ class MockExamIndexQueryCountTest extends TestCase
 
     private function countQueriesFor(\Closure $closure): int
     {
-        $count = 0;
-        DB::listen(function () use (&$count): void {
-            $count++;
-        });
+        DB::flushQueryLog();
+        DB::enableQueryLog();
 
-        $closure();
+        try {
+            $closure();
 
-        return $count;
+            return count(DB::getQueryLog());
+        } finally {
+            DB::disableQueryLog();
+            DB::flushQueryLog();
+        }
     }
 }
