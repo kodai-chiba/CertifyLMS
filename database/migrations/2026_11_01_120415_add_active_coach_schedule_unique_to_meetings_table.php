@@ -28,6 +28,11 @@ return new class extends Migration
 
     public function down(): void
     {
+        // coach_id の外部キー制約を維持するための代替インデックスを作成
+        Schema::table('meetings', function (Blueprint $table) {
+            $table->index('coach_id', 'meetings_coach_id_foreign');
+        });
+
         Schema::table('meetings', function (Blueprint $table) {
             $table->dropUnique('meetings_coach_active_schedule_unique');
             $table->dropColumn('active_scheduled_at');
