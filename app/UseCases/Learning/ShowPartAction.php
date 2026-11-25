@@ -8,7 +8,7 @@ use App\Enums\CertificationStatus;
 use App\Enums\ContentStatus;
 use App\Models\Part;
 use App\Models\User;
-use Illuminate\Support\Facades\DB;
+use App\Services\Learning\LearningProgressService;
 use Illuminate\Support\Facades\Gate;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
@@ -20,10 +20,15 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
  * 未登録または閲覧不可の受講状態であれば 403 を返す。
  *
  * 公開済 Chapter 一覧に加え、各 Chapter の Section 総数 / 読了済 Section 数を
- * 1 ショット SQL で集計して Blade に渡す (Chapter 完了バッジの表示用)。
+ * Blade に渡す (Chapter 完了バッジの表示用)。
+ * 読了済 Section 数の集計は LearningProgressService に委譲する。
  */
 final class ShowPartAction
 {
+    public function __construct(
+        private readonly LearningProgressService $progressService,
+    ) {}
+
     /**
      * @return array<string, mixed>
      */
@@ -52,23 +57,8 @@ final class ShowPartAction
             ->where('certification_id', $part->certification_id)
             ->first();
 
-        $completedByChapter = [];
-        if ($enrollment !== null && $chapters->isNotEmpty()) {
-            $rows = DB::table('sections')
-                ->join('section_progresses', function ($join) use ($enrollment) {
-                    $join->on('section_progresses.section_id', '=', 'sections.id')
-                        ->where('section_progresses.enrollment_id', '=', $enrollment->id);
-                })
-                ->whereIn('sections.chapter_id', $chapters->pluck('id'))
-                ->where('sections.status', ContentStatus::Published->value)
-                ->groupBy('sections.chapter_id')
-                ->selectRaw('sections.chapter_id AS chapter_id, COUNT(*) AS done')
-                ->get();
-
-            foreach ($rows as $row) {
-                $completedByChapter[(string) $row->chapter_id] = (int) $row->done;
-            }
-        }
+        $completedByChapter = $this->progressService
+            ->countCompletedSectionsByChapter($enrollment, $chapters);
 
         return [
             'part' => $part->load('certification'),
