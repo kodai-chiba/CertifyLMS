@@ -6,6 +6,7 @@ namespace Tests\Feature\Http\MockExam;
 
 use App\Models\Certification;
 use App\Models\MockExam;
+use App\Models\MockExamQuestion;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
@@ -48,6 +49,90 @@ class MockExamIndexTest extends TestCase
                 && $exam->createdBy?->id === $creator->id
                 && $exam->updatedBy?->id === $updater->id;
         });
+    }
+
+    public function test_admin_can_view_correct_question_counts_for_multiple_mock_exams(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $certification = Certification::factory()->published()->create();
+
+        $firstMockExam = MockExam::factory()
+            ->forCertification($certification)
+            ->create();
+
+        $secondMockExam = MockExam::factory()
+            ->forCertification($certification)
+            ->create();
+
+        $emptyMockExam = MockExam::factory()
+            ->forCertification($certification)
+            ->create();
+
+        MockExamQuestion::factory()
+            ->count(6)
+            ->forMockExam($firstMockExam)
+            ->create();
+
+        MockExamQuestion::factory()
+            ->count(3)
+            ->forMockExam($secondMockExam)
+            ->create();
+
+        $this->actingAs($admin)
+            ->get(route('admin.mock-exams.index'))
+            ->assertOk()
+            ->assertViewHas('mockExams', function ($mockExams) use ($firstMockExam, $secondMockExam, $emptyMockExam): bool {
+                $exams = $mockExams->getCollection()->keyBy('id');
+
+                return $exams->count() === 3
+                    && $exams->get($firstMockExam->id)?->mock_exam_questions_count === 6
+                    && $exams->get($secondMockExam->id)?->mock_exam_questions_count === 3
+                    && $exams->get($emptyMockExam->id)?->mock_exam_questions_count === 0;
+            });
+    }
+
+    public function test_coach_can_view_correct_question_count_for_assigned_mock_exam(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $coach = User::factory()->coach()->create();
+
+        $assignedCertification = Certification::factory()->published()->create();
+        $unassignedCertification = Certification::factory()->published()->create();
+
+        $assignedCertification->coaches()->attach($coach->id, [
+            'id' => (string) Str::ulid(),
+            'assigned_by_user_id' => $admin->id,
+            'assigned_at' => now(),
+        ]);
+
+        $assignedMockExam = MockExam::factory()
+            ->forCertification($assignedCertification)
+            ->create();
+
+        $unassignedMockExam = MockExam::factory()
+            ->forCertification($unassignedCertification)
+            ->create();
+
+        MockExamQuestion::factory()
+            ->count(6)
+            ->forMockExam($assignedMockExam)
+            ->create();
+
+        MockExamQuestion::factory()
+            ->count(3)
+            ->forMockExam($unassignedMockExam)
+            ->create();
+
+        $this->actingAs($coach)
+            ->get(route('admin.mock-exams.index'))
+            ->assertOk()
+            ->assertViewHas('mockExams', function ($mockExams) use ($assignedMockExam, $unassignedMockExam): bool {
+                $exams = $mockExams->getCollection()->keyBy('id');
+
+                return $mockExams->total() === 1
+                    && $exams->get($assignedMockExam->id)?->mock_exam_questions_count === 6
+                    && ! $exams->has($unassignedMockExam->id);
+            });
     }
 
     public function test_admin_can_filter_mock_exams_by_keyword_certification_and_publication(): void

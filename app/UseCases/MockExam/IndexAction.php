@@ -30,7 +30,8 @@ final class IndexAction
                 'certification',
                 'createdBy',
                 'updatedBy',
-            ]);
+            ])
+            ->withCount('mockExamQuestions');
 
         if ($auth->role === UserRole::Coach) {
             $query->whereHas(
