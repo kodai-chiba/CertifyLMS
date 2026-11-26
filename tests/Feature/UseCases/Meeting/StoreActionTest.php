@@ -14,11 +14,14 @@ use App\Models\Enrollment;
 use App\Models\Meeting;
 use App\Models\MeetingQuotaTransaction;
 use App\Models\User;
+use App\Services\GoogleCalendarService;
 use App\Services\MeetingQuotaService;
 use App\UseCases\Meeting\StoreAction;
 use Carbon\Carbon;
+use Carbon\CarbonInterface;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
+use Mockery;
 use Tests\TestCase;
 
 class StoreActionTest extends TestCase
@@ -208,5 +211,186 @@ class StoreActionTest extends TestCase
         );
 
         $this->assertSame('面談URL確認', $meeting->topic);
+    }
+
+    /**
+     * @group external-api
+     * @group google-calendar
+     */
+    public function test_assigns_coach_without_google_calendar_conflict(): void
+    {
+        $data = $this->createReservationData();
+
+        $busyCoach = $data['coach'];
+
+        $availableCoach = User::factory()->coach()->inProgress()->create([
+            'meeting_url' => 'https://meet.example.com/available-coach',
+        ]);
+
+        $admin = User::factory()->admin()->create();
+
+        $this->attachCoach(
+            $data['enrollment']->certification,
+            $availableCoach,
+            $admin,
+        );
+
+        CoachAvailability::factory()
+            ->forCoach($availableCoach)
+            ->onDay(1)
+            ->timeRange('10:00:00', '11:00:00')
+            ->create();
+
+        $scheduledAt = $data['scheduled_at'];
+
+        $googleCalendar = Mockery::mock(GoogleCalendarService::class);
+
+        $googleCalendar->shouldReceive('isBusy')
+            ->twice()
+            ->withArgs(fn (User $user, CarbonInterface $start, CarbonInterface $end): bool => $user->is($busyCoach)
+                && $start->equalTo($scheduledAt)
+                && $end->equalTo($scheduledAt->copy()->addHour())
+            )
+            ->andReturnTrue();
+
+        $googleCalendar->shouldReceive('isBusy')
+            ->times(8)
+            ->withArgs(fn (User $user, CarbonInterface $start, CarbonInterface $end): bool => $user->is($busyCoach)
+                && $start->isSameDay($scheduledAt)
+                && ! $start->equalTo($scheduledAt)
+                && $end->equalTo($start->copy()->addHour())
+            )
+            ->andReturnFalse();
+
+        $googleCalendar->shouldReceive('isBusy')
+            ->twice()
+            ->withArgs(fn (User $user, CarbonInterface $start, CarbonInterface $end): bool => $user->is($availableCoach)
+                && $start->equalTo($scheduledAt)
+                && $end->equalTo($scheduledAt->copy()->addHour())
+            )
+            ->andReturnFalse();
+
+        $googleCalendar->shouldReceive('createMeetingEvent')
+            ->with(Mockery::type(Meeting::class))
+            ->zeroOrMoreTimes()
+            ->andReturnNull();
+
+        $this->app->instance(GoogleCalendarService::class, $googleCalendar);
+
+        $meeting = app(StoreAction::class)(
+            $data['enrollment'],
+            $scheduledAt,
+            'Google Calendarの予定を考慮した面談予約',
+        );
+
+        $this->assertSame(MeetingStatus::Reserved, $meeting->status);
+        $this->assertSame($availableCoach->id, $meeting->coach_id);
+
+        $this->assertSame(
+            'https://meet.example.com/available-coach',
+            $meeting->meeting_url_snapshot,
+        );
+
+        $this->assertDatabaseHas('meetings', [
+            'id' => $meeting->id,
+            'enrollment_id' => $data['enrollment']->id,
+            'student_id' => $data['student']->id,
+            'coach_id' => $availableCoach->id,
+        ]);
+
+        $this->assertDatabaseMissing('meetings', [
+            'enrollment_id' => $data['enrollment']->id,
+            'coach_id' => $busyCoach->id,
+        ]);
+
+        $this->assertSame(
+            2,
+            app(MeetingQuotaService::class)->remaining($data['student']),
+        );
+
+        $this->assertDatabaseHas('meeting_quota_transactions', [
+            'user_id' => $data['student']->id,
+            'related_meeting_id' => $meeting->id,
+            'type' => MeetingQuotaTransactionType::Consumed->value,
+            'amount' => -1,
+        ]);
+    }
+
+    /**
+     * @group external-api
+     * @group google-calendar
+     */
+    public function test_rejects_reservation_when_all_coaches_have_google_calendar_conflicts(): void
+    {
+        $data = $this->createReservationData();
+
+        $coachA = $data['coach'];
+
+        $coachB = User::factory()->coach()->inProgress()->create();
+
+        $admin = User::factory()->admin()->create();
+
+        $this->attachCoach(
+            $data['enrollment']->certification,
+            $coachB,
+            $admin,
+        );
+
+        CoachAvailability::factory()
+            ->forCoach($coachB)
+            ->onDay(1)
+            ->timeRange('10:00:00', '11:00:00')
+            ->create();
+
+        $scheduledAt = $data['scheduled_at'];
+
+        $googleCalendar = Mockery::mock(GoogleCalendarService::class);
+
+        $googleCalendar->shouldReceive('isBusy')
+            ->once()
+            ->withArgs(fn (User $user, CarbonInterface $start, CarbonInterface $end): bool => $user->is($coachA)
+                && $start->equalTo($scheduledAt)
+                && $end->equalTo($scheduledAt->copy()->addHour())
+            )
+            ->andReturnTrue();
+
+        $googleCalendar->shouldReceive('isBusy')
+            ->times(8)
+            ->withArgs(fn (User $user, CarbonInterface $start, CarbonInterface $end): bool => $user->is($coachA)
+                && $start->isSameDay($scheduledAt)
+                && ! $start->equalTo($scheduledAt)
+                && $end->equalTo($start->copy()->addHour())
+            )
+            ->andReturnFalse();
+
+        $googleCalendar->shouldReceive('isBusy')
+            ->once()
+            ->withArgs(fn (User $user, CarbonInterface $start, CarbonInterface $end): bool => $user->is($coachB)
+                && $start->equalTo($scheduledAt)
+                && $end->equalTo($scheduledAt->copy()->addHour())
+            )
+            ->andReturnTrue();
+
+        $googleCalendar->shouldNotReceive('createMeetingEvent');
+
+        $this->app->instance(GoogleCalendarService::class, $googleCalendar);
+
+        try {
+            app(StoreAction::class)(
+                $data['enrollment'],
+                $scheduledAt,
+                'Google Calendarの予定と重複する面談予約',
+            );
+
+            $this->fail('予約可能なコーチが存在しない場合の例外が発生しませんでした。');
+        } catch (MeetingOutOfAvailabilityException $e) {
+            $this->assertDatabaseCount('meetings', 0);
+            $this->assertDatabaseCount('meeting_quota_transactions', 0);
+
+            $this->assertSame(
+                3,
+                app(MeetingQuotaService::class)->remaining($data['student']),
+            );
+        }
     }
 }

@@ -11,9 +11,14 @@ use App\Models\AiChatDailyUsage;
 use App\Models\AiChatMessage;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
+/**
+ * @group external-api
+ * @group gemini
+ */
 class AiChatMessageTest extends TestCase
 {
     use RefreshDatabase;
@@ -177,5 +182,173 @@ class AiChatMessageTest extends TestCase
         $this->assertSame(0, $usage->question_count);
 
         Http::assertSentCount(1);
+    }
+
+    public function test_sends_only_completed_messages_in_chronological_order_to_gemini(): void
+    {
+        // Arrange
+        $apiUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-test-model:generateContent';
+
+        Http::fake([
+            $apiUrl => Http::response([
+                'candidates' => [
+                    [
+                        'content' => [
+                            'parts' => [
+                                ['text' => 'Controllerはリクエストを処理します。'],
+                            ],
+                        ],
+                    ],
+                ],
+                'usageMetadata' => [
+                    'promptTokenCount' => 30,
+                    'candidatesTokenCount' => 20,
+                ],
+            ], 200),
+        ]);
+
+        $student = User::factory()
+            ->student()
+            ->inProgress()
+            ->create();
+
+        $conversation = AiChatConversation::query()->create([
+            'user_id' => $student->id,
+            'title' => 'Laravelの質問',
+        ]);
+
+        $otherConversation = AiChatConversation::query()->create([
+            'user_id' => $student->id,
+            'title' => '別の会話',
+        ]);
+
+        $baseTime = now();
+
+        // 作成順ではなく、メッセージの日時順に送信されることを検証する。
+        // テストデータの日時を明示的に保存するため、forceCreateを使用する。
+        AiChatMessage::query()->forceCreate([
+            'conversation_id' => $conversation->id,
+            'role' => AiChatMessageRole::Assistant->value,
+            'content' => 'MVCはModel、View、Controllerの略です。',
+            'status' => AiChatMessageStatus::Completed->value,
+            'created_at' => $baseTime->copy()->subMinutes(4),
+            'updated_at' => $baseTime->copy()->subMinutes(4),
+        ]);
+
+        AiChatMessage::query()->forceCreate([
+            'conversation_id' => $conversation->id,
+            'role' => AiChatMessageRole::User->value,
+            'content' => 'LaravelのMVCについて教えてください。',
+            'status' => AiChatMessageStatus::Completed->value,
+            'created_at' => $baseTime->copy()->subMinutes(5),
+            'updated_at' => $baseTime->copy()->subMinutes(5),
+        ]);
+
+        AiChatMessage::query()->forceCreate([
+            'conversation_id' => $conversation->id,
+            'role' => AiChatMessageRole::Assistant->value,
+            'content' => null,
+            'status' => AiChatMessageStatus::Pending->value,
+            'created_at' => $baseTime->copy()->subMinutes(3),
+            'updated_at' => $baseTime->copy()->subMinutes(3),
+        ]);
+
+        AiChatMessage::query()->forceCreate([
+            'conversation_id' => $conversation->id,
+            'role' => AiChatMessageRole::Assistant->value,
+            'content' => null,
+            'status' => AiChatMessageStatus::Error->value,
+            'error_detail' => 'AIサービスから回答を取得できませんでした。',
+            'created_at' => $baseTime->copy()->subMinutes(2),
+            'updated_at' => $baseTime->copy()->subMinutes(2),
+        ]);
+
+        AiChatMessage::query()->forceCreate([
+            'conversation_id' => $otherConversation->id,
+            'role' => AiChatMessageRole::User->value,
+            'content' => '別の会話の質問です。',
+            'status' => AiChatMessageStatus::Completed->value,
+            'created_at' => $baseTime->copy()->subMinute(),
+            'updated_at' => $baseTime->copy()->subMinute(),
+        ]);
+
+        // Act
+        $response = $this->actingAs($student)
+            ->postJson(
+                route('ai-chat.conversations.messages.store', $conversation),
+                [
+                    'content' => 'Controllerの役割を教えてください。',
+                ]
+            );
+
+        // Assert
+        $response->assertOk();
+
+        Http::assertSent(function (Request $request) use ($apiUrl): bool {
+            return $request->url() === $apiUrl
+                && $request->method() === 'POST'
+                && $request->hasHeader('x-goog-api-key', 'test-api-key')
+                && $request->data() === [
+                    'contents' => [
+                        [
+                            'role' => 'user',
+                            'parts' => [
+                                ['text' => 'LaravelのMVCについて教えてください。'],
+                            ],
+                        ],
+                        [
+                            'role' => 'model',
+                            'parts' => [
+                                ['text' => 'MVCはModel、View、Controllerの略です。'],
+                            ],
+                        ],
+                        [
+                            'role' => 'user',
+                            'parts' => [
+                                ['text' => 'Controllerの役割を教えてください。'],
+                            ],
+                        ],
+                    ],
+                ];
+        });
+
+        Http::assertSentCount(1);
+
+        $this->assertDatabaseHas('ai_chat_messages', [
+            'conversation_id' => $conversation->id,
+            'role' => AiChatMessageRole::User->value,
+            'content' => 'Controllerの役割を教えてください。',
+            'status' => AiChatMessageStatus::Completed->value,
+        ]);
+
+        $this->assertDatabaseHas('ai_chat_messages', [
+            'conversation_id' => $conversation->id,
+            'role' => AiChatMessageRole::Assistant->value,
+            'content' => 'Controllerはリクエストを処理します。',
+            'status' => AiChatMessageStatus::Completed->value,
+            'model' => 'gemini-test-model',
+            'input_tokens' => 30,
+            'output_tokens' => 20,
+        ]);
+
+        $this->assertSame(
+            6,
+            AiChatMessage::query()
+                ->where('conversation_id', $conversation->id)
+                ->count()
+        );
+
+        $this->assertSame(
+            1,
+            AiChatMessage::query()
+                ->where('conversation_id', $otherConversation->id)
+                ->count()
+        );
+
+        $usage = AiChatDailyUsage::query()
+            ->where('user_id', $student->id)
+            ->firstOrFail();
+
+        $this->assertSame(1, $usage->question_count);
     }
 }

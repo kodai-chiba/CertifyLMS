@@ -9,6 +9,7 @@ use App\Http\Controllers\Controller;
 use App\Models\GoogleCalendarCredential;
 use Google\Client;
 use Google\Service\Calendar;
+use GuzzleHttp\ClientInterface;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -18,6 +19,10 @@ use Throwable;
 class GoogleCalendarController extends Controller
 {
     private const OAUTH_STATE_SESSION_KEY = 'google_calendar_oauth_state';
+
+    public function __construct(
+        private readonly ?ClientInterface $httpClient = null
+    ) {}
 
     public function redirect(Request $request): RedirectResponse
     {
@@ -126,6 +131,10 @@ class GoogleCalendarController extends Controller
         $client->setClientId($clientId);
         $client->setClientSecret($clientSecret);
         $client->setRedirectUri($redirectUri);
+
+        if ($this->httpClient !== null) {
+            $client->setHttpClient($this->httpClient);
+        }
 
         return $client;
     }
