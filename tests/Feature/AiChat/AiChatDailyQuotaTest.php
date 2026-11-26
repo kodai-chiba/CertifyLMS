@@ -11,6 +11,10 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
+/**
+ * @group external-api
+ * @group gemini
+ */
 class AiChatDailyQuotaTest extends TestCase
 {
     use RefreshDatabase;

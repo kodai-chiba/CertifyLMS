@@ -212,6 +212,10 @@ class AiChatConversationTest extends TestCase
         $this->assertDatabaseCount('ai_chat_conversations', 0);
     }
 
+    /**
+     * @group external-api
+     * @group gemini
+     */
     public function test_new_conversation_redirects_to_saved_conversation_when_gemini_fails(): void
     {
         $this->fakeGeminiUnavailable();
@@ -237,6 +241,10 @@ class AiChatConversationTest extends TestCase
         Http::assertSentCount(1);
     }
 
+    /**
+     * @group external-api
+     * @group gemini
+     */
     public function test_new_conversation_returns_502_and_saved_conversation_when_gemini_fails_for_json(): void
     {
         $this->fakeGeminiUnavailable();

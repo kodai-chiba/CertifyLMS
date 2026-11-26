@@ -11,11 +11,17 @@ use App\Models\Payment;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
+use Tests\Support\PreventsStripeApiRequests;
 use Tests\TestCase;
 use UnexpectedValueException;
 
+/**
+ * @group external-api
+ * @group stripe
+ */
 class StripeWebhookTest extends TestCase
 {
+    use PreventsStripeApiRequests;
     use RefreshDatabase;
 
     private const WEBHOOK_SECRET = 'whsec_test_secret';
@@ -24,10 +30,21 @@ class StripeWebhookTest extends TestCase
     {
         parent::setUp();
 
+        $this->preventStripeApiRequests();
+
         config()->set(
             'services.stripe.webhook_secret',
             self::WEBHOOK_SECRET
         );
+    }
+
+    protected function tearDown(): void
+    {
+        try {
+            parent::tearDown();
+        } finally {
+            $this->restoreStripeHttpClient();
+        }
     }
 
     public function test_paid_checkout_grants_meeting_quota(): void
@@ -76,6 +93,79 @@ class StripeWebhookTest extends TestCase
         );
     }
 
+    public function test_same_webhook_event_does_not_grant_quota_twice(): void
+    {
+        $payment = Payment::factory()->create([
+            'amount' => 5000,
+            'quantity' => 3,
+        ]);
+
+        // 同一イベントID・同一ペイロードを使用する。
+        $event = $this->webhookEvent(
+            $this->checkoutSession($payment)
+        );
+
+        $payload = json_encode(
+            $event,
+            JSON_THROW_ON_ERROR
+        );
+
+        // 初回のWebhookを処理する。
+        $this->sendSignedPayload($payload)
+            ->assertOk()
+            ->assertJson(['received' => true]);
+
+        $payment->refresh();
+
+        $this->assertSame(
+            PaymentStatus::Paid,
+            $payment->status
+        );
+
+        $this->assertNotNull($payment->paid_at);
+
+        $paidAt = $payment->paid_at->toDateTimeString();
+
+        $this->assertSame(
+            1,
+            $this->purchasedTransactionCount($payment)
+        );
+
+        // 同一イベントが再送された場合を検証する。
+        $this->sendSignedPayload($payload)
+            ->assertOk()
+            ->assertJson(['received' => true]);
+
+        $payment->refresh();
+
+        $this->assertSame(
+            PaymentStatus::Paid,
+            $payment->status
+        );
+
+        $this->assertSame(
+            $paidAt,
+            $payment->paid_at->toDateTimeString()
+        );
+
+        $this->assertSame(
+            'pi_test_123',
+            $payment->stripe_payment_intent_id
+        );
+
+        $this->assertSame(
+            1,
+            $this->purchasedTransactionCount($payment)
+        );
+
+        $this->assertDatabaseHas('meeting_quota_transactions', [
+            'user_id' => $payment->user_id,
+            'type' => MeetingQuotaTransactionType::Purchased->value,
+            'amount' => 3,
+            'related_payment_id' => $payment->id,
+        ]);
+    }
+
     public function test_invalid_signature_is_rejected(): void
     {
         $payload = json_encode(
@@ -99,6 +189,56 @@ class StripeWebhookTest extends TestCase
             ],
             $payload
         )->assertStatus(400);
+
+        $this->assertDatabaseCount(
+            'meeting_quota_transactions',
+            0
+        );
+    }
+
+    public function test_missing_signature_is_rejected(): void
+    {
+        $payment = Payment::factory()->create([
+            'amount' => 5000,
+            'quantity' => 3,
+        ]);
+
+        $payload = json_encode(
+            $this->webhookEvent(
+                $this->checkoutSession($payment)
+            ),
+            JSON_THROW_ON_ERROR
+        );
+
+        // Stripe-Signatureヘッダーを付与せずに送信する。
+        $this->call(
+            'POST',
+            '/webhooks/stripe',
+            [],
+            [],
+            [],
+            [
+                'CONTENT_TYPE' => 'application/json',
+            ],
+            $payload
+        )->assertStatus(400)
+            ->assertJson([
+                'message' => 'Missing Stripe signature.',
+            ]);
+
+        $payment->refresh();
+
+        $this->assertSame(
+            PaymentStatus::Pending,
+            $payment->status
+        );
+
+        $this->assertNull($payment->paid_at);
+
+        $this->assertSame(
+            0,
+            $this->purchasedTransactionCount($payment)
+        );
 
         $this->assertDatabaseCount(
             'meeting_quota_transactions',
@@ -460,6 +600,14 @@ class StripeWebhookTest extends TestCase
             JSON_THROW_ON_ERROR
         );
 
+        return $this->sendSignedPayload($payload);
+    }
+
+    /**
+     * 指定されたペイロードに正しいStripe署名を付与して送信する。
+     */
+    private function sendSignedPayload(string $payload): TestResponse
+    {
         $timestamp = time();
 
         $signature = hash_hmac(

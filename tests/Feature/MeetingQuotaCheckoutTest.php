@@ -10,11 +10,45 @@ use App\Models\User;
 use App\Services\StripeCheckoutService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Mockery;
+use Mockery\MockInterface;
+use Tests\Support\PreventsStripeApiRequests;
 use Tests\TestCase;
 
+/**
+ * @group external-api
+ * @group stripe
+ */
 class MeetingQuotaCheckoutTest extends TestCase
 {
+    use PreventsStripeApiRequests;
     use RefreshDatabase;
+
+    private MockInterface $stripeCheckoutService;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->preventStripeApiRequests();
+
+        $this->stripeCheckoutService = Mockery::mock(
+            StripeCheckoutService::class
+        );
+
+        $this->app->instance(
+            StripeCheckoutService::class,
+            $this->stripeCheckoutService
+        );
+    }
+
+    protected function tearDown(): void
+    {
+        try {
+            parent::tearDown();
+        } finally {
+            $this->restoreStripeHttpClient();
+        }
+    }
 
     public function test_purchase_page_displays_only_published_packs(): void
     {
@@ -74,6 +108,9 @@ class MeetingQuotaCheckoutTest extends TestCase
             ->assertForbidden();
 
         $this->assertDatabaseCount('payments', 0);
+
+        $this->stripeCheckoutService
+            ->shouldNotHaveReceived('createSession');
     }
 
     public function test_draft_pack_cannot_be_purchased(): void
@@ -89,6 +126,9 @@ class MeetingQuotaCheckoutTest extends TestCase
             ->assertSessionHasErrors('meeting_pack_id');
 
         $this->assertDatabaseCount('payments', 0);
+
+        $this->stripeCheckoutService
+            ->shouldNotHaveReceived('createSession');
     }
 
     public function test_archived_pack_cannot_be_purchased(): void
@@ -104,6 +144,9 @@ class MeetingQuotaCheckoutTest extends TestCase
             ->assertSessionHasErrors('meeting_pack_id');
 
         $this->assertDatabaseCount('payments', 0);
+
+        $this->stripeCheckoutService
+            ->shouldNotHaveReceived('createSession');
     }
 
     public function test_invalid_pack_id_is_rejected(): void
@@ -115,6 +158,11 @@ class MeetingQuotaCheckoutTest extends TestCase
                 'meeting_pack_id' => 'invalid-id',
             ])
             ->assertSessionHasErrors('meeting_pack_id');
+
+        $this->assertDatabaseCount('payments', 0);
+
+        $this->stripeCheckoutService
+            ->shouldNotHaveReceived('createSession');
     }
 
     public function test_published_pack_redirects_to_stripe_checkout(): void
@@ -136,9 +184,8 @@ class MeetingQuotaCheckoutTest extends TestCase
 
         $checkoutUrl = 'https://checkout.stripe.com/c/pay/test-session';
 
-        $service = Mockery::mock(StripeCheckoutService::class);
-
-        $service->shouldReceive('createSession')
+        $this->stripeCheckoutService
+            ->shouldReceive('createSession')
             ->once()
             ->withArgs(function (
                 User $user,
@@ -155,8 +202,6 @@ class MeetingQuotaCheckoutTest extends TestCase
                 'payment' => $payment,
                 'checkout_url' => $checkoutUrl,
             ]);
-
-        $this->app->instance(StripeCheckoutService::class, $service);
 
         $this->actingAs($student)
             ->post(route('meeting-quota.checkout.create'), [
